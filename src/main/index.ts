@@ -1,14 +1,14 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, nativeImage, shell } from 'electron';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { Database } from './core/db';
-import { createContext, type ApiContext } from './api/context';
+import { Database } from '../db';
+import { createContext, type ApiContext } from '../services/session';
 import { invoke } from './api/invoke';
-import { getLicenseStatus } from './core/license';
+import { getLicenseStatus } from '../license/license';
 import { productNameForEdition } from '../shared/editions';
 import { printHtml } from './print/printer';
-import { createBackup, listBackups } from './services/backup';
-import { audit } from './core/audit';
+import { createBackup, listBackups } from '../services/backup';
+import { audit } from '../services/audit';
 
 // Keep the Windows data folder stable and branded ("%APPDATA%/Infoflex").
 app.setName('Infoflex');

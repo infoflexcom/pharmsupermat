@@ -1,8 +1,8 @@
-import type { Database } from '../core/db';
-import { nowIso } from '../core/db';
-import type { ReturnInput, ReturnLine, SaleReturn, StoreProfile } from '../../shared/types';
-import { AppError, notFound, validation } from '../core/errors';
-import { audit } from '../core/audit';
+import type { Database } from '../db';
+import { nowIso } from '../db';
+import type { ReturnInput, ReturnLine, SaleReturn, StoreProfile } from '../shared/types';
+import { AppError, notFound, validation } from '../shared/errors';
+import { audit } from './audit';
 import { receiveStock, type Actor } from './stock';
 import { getSale, returnedQtyForItem, type SalesActor } from './sales';
 import { nextDocumentNumber, rangeBounds } from './helpers';
@@ -128,7 +128,7 @@ function restockReturn(db: Database, ret: SaleReturn, actor: Actor): void {
     if (!item.restock) continue;
     const batch = item.batchId
       ? (db.handle
-          .prepare('SELECT batch_no, expiry_date FROM stock_batches WHERE id = ?')
+          .prepare('SELECT batch_no, expiry_date FROM product_batches WHERE id = ?')
           .get(item.batchId) as { batch_no: string; expiry_date: string | null } | undefined)
       : undefined;
     receiveStock(db, item.productId, item.qty, {

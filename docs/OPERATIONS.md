@@ -119,7 +119,35 @@ outside its own database — and only through the OS.
 Only administrators can add users or reset passwords. A new user gets a
 temporary password and must change it at first sign-in.
 
-## 9. Troubleshooting
+## 9. Database checks, day closing and shifts
+
+```bash
+npm run db:verify     # writes + reads a row in every table on a throw-away DB
+npm run db:schema     # regenerates docs/SCHEMA.md from the real migrations
+```
+
+Both run against a temporary database; neither touches a shop's live file.
+Run them after changing `src/db/migrations.ts` or `src/db/schema.ts` — `db:verify`
+fails when the two disagree.
+
+**Day closing** (`operations.day.totals` → `operations.day.close`) stores one row
+per business date with cash/transfer/POS totals, returns, expected cash and the
+variance against the counted drawer. Closing the same date twice is refused, so
+the figures on a printed day report can never silently change.
+
+**Cashier shifts** (supermarket edition): open a shift with a float, log drawer
+events (no-sale, paid in, paid out), then close with the counted cash. Only the
+cashier who opened the shift can close it; the expected cash comes from the cash
+payments recorded against that shift, and every event is in the audit log.
+
+**Upgrading an existing installation**: start the new build. The database
+migrations run on open and are tracked with `PRAGMA user_version`; schema v2
+renames `stock_batches → product_batches`, `stock_moves → stock_movements`,
+`license → license_state` and `rx_required → requires_prescription`, backfills
+categories and barcodes, and keeps every row. Take a backup first if you want a
+rollback point.
+
+## 10. Troubleshooting
 
 | Symptom | What to do |
 | --- | --- |

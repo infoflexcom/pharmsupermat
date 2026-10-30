@@ -1,8 +1,8 @@
-import type { Database } from '../core/db';
-import type { ReportKind, ReportRequest, ReportResult, StoreProfile } from '../../shared/types';
+import type { Database } from '../db';
+import type { ReportKind, ReportRequest, ReportResult, StoreProfile } from '../shared/types';
 import { buildReportDocument } from './documents';
 import { dayRange, rangeBounds } from './helpers';
-import { listAudit } from '../core/audit';
+import { listAudit } from './audit';
 import { listStockAlerts } from './inventory';
 
 const KIND_TITLES: Record<ReportKind, string> = {
@@ -155,7 +155,7 @@ export function buildReport(ctx: ReportContext, request: ReportRequest): ReportR
           `SELECT p.sku, p.name, p.unit,
                   COALESCE(SUM(b.qty), 0) AS qty,
                   p.cost_price AS cost_price, p.price AS price
-           FROM products p LEFT JOIN stock_batches b ON b.product_id = p.id
+           FROM products p LEFT JOIN product_batches b ON b.product_id = p.id
            WHERE p.active = 1
            GROUP BY p.id ORDER BY p.name COLLATE NOCASE`
         )

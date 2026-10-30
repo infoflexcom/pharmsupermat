@@ -137,6 +137,17 @@ export interface Product {
   stockQty: number;
   /** Nearest expiry across batches (pharmacy edition). */
   nearestExpiry: string | null;
+  /* ---- pharmacy module ---- */
+  genericName: string | null;
+  /* ---- supermarket module ---- */
+  categoryId: number | null;
+  departmentId: number | null;
+  shelfLocation: string | null;
+  pluCode: string | null;
+  pricePerKg: Money | null;
+  isWeighed: boolean;
+  /* ---- shared ---- */
+  supplierId: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -166,6 +177,17 @@ export interface ProductInput {
   openingStock?: number;
   openingBatchNo?: string;
   openingExpiry?: string | null;
+  /* ---- pharmacy module ---- */
+  genericName?: string | null;
+  /* ---- supermarket module ---- */
+  departmentId?: number | null;
+  shelfLocation?: string | null;
+  pluCode?: string | null;
+  pricePerKg?: Money | null;
+  isWeighed?: boolean;
+  /* ---- shared ---- */
+  supplierId?: number | null;
+  categoryId?: number | null;
 }
 
 export interface StockReceiveInput {
@@ -202,6 +224,12 @@ export interface SaleInput {
   note?: string;
   /** Supervisor/admin who approved a price override on this sale. */
   priceOverrideApprovedBy?: number;
+  /** Split payment: one entry per method. Amounts are what the customer tendered. */
+  payments?: { method: PaymentMethod; amount: Money; reference?: string | null }[];
+  /* ---- shared directory / supermarket module ---- */
+  customerId?: number | null;
+  loyaltyMemberId?: number | null;
+  shiftId?: number | null;
 }
 
 export interface SaleItem {
@@ -249,6 +277,10 @@ export interface Sale {
   storePhone: string;
   note: string | null;
   createdAt: string;
+  customerId: number | null;
+  loyaltyMemberId: number | null;
+  shiftId: number | null;
+  payments: { id: number; method: string; amount: Money; reference: string | null }[];
   items?: SaleItem[];
 }
 

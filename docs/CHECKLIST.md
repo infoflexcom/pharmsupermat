@@ -10,11 +10,12 @@ machine.
 | # | Command | Result |
 | --- | --- | --- |
 | 1 | `npm run typecheck` (main + renderer, strict, `noUnusedLocals`) | ✅ clean |
-| 2 | `VENDOR_MASTER_PASSWORD=… npm test` | ✅ **63/63 tests pass** (6 API suites + 2 jsdom suites mounting every screen) |
+| 2 | `VENDOR_MASTER_PASSWORD=… npm test` | ✅ **72/72 tests pass** (8 API/DB suites + 2 jsdom suites mounting every screen) |
 | 3 | `npm run build` (`electron-vite` production bundles) | ✅ `out/main` 137 kB, `out/preload` 0.3 kB, `out/renderer` 824 kB |
 | 4 | `npm run dev:web` + `npm run smoke` (fresh database) | ✅ **30/30 end-to-end checks pass** |
-| 5 | Browser harness served through the Arena preview host | ✅ HTTP 200, React tree + asset graph load, login works |
-| 6 | `npx electron --version` / `electron-builder --linux dir` | ❌ blocked by the sandbox: no Electron binary can be downloaded (TLS-intercepting proxy), no GTK/display, no wine |
+| 5 | `npm run db:verify` | ✅ **145 checks pass** — every one of the 30 tables written and read back, manifest matches the migrations |
+| 6 | Browser harness served through the Arena preview host | ✅ HTTP 200, React tree + asset graph load, login works |
+| 7 | `npx electron --version` / `electron-builder --linux dir` | ❌ blocked by the sandbox: no Electron binary can be downloaded (TLS-intercepting proxy), no GTK/display, no wine |
 
 What the harness proves: the same `invoke()` dispatcher, guards, services,
 SQLite schema, transactions and document renderer that the Electron main process
@@ -29,7 +30,7 @@ the NSIS installer itself.
 
 | Requirement | Status | Evidence / notes |
 | --- | --- | --- |
-| Electron + React (TypeScript) + SQLite (better-sqlite3) | ✅ | `electron.vite.config.ts`, `src/main`, `src/renderer`, `src/main/core/db.ts` |
+| Electron + React (TypeScript) + SQLite (better-sqlite3) | ✅ | `electron.vite.config.ts`, `src/main`, `src/renderer`, `src/db/index.ts` |
 | Packaged with electron-builder (NSIS) | ⚠️ config only | `electron-builder.yml` (NSIS, per-user, shortcuts, EULA, ico). Installer binary could not be produced in this sandbox — build on Windows with `npm run dist:win` |
 | Installable offline | ✅ by design | no network calls anywhere in `src/` (grep for `fetch` finds only the dev harness); all data local |
 | One app, two editions chosen at activation | ✅ | `src/shared/editions.ts`, activation screen, signed licence |
@@ -88,7 +89,7 @@ the NSIS installer itself.
 | Audit log for important actions | ✅ | append-only `audit_log`; smoke asserts `license.activate, setup.complete, auth.login, sale.create, sale.void, return.create, user.create`; denials logged as `security.permission.denied` |
 | Modular code | ✅ | shared / core / services / api / renderer split |
 | Offline | ✅ | no outbound network in shipping code |
-| No questions asked; decisions documented | ✅ | `docs/DECISIONS.md` (25 entries) |
+| No questions asked; decisions documented | ✅ | `docs/DECISIONS.md` (27 entries) |
 
 ### Operational flows exercised end-to-end (smoke test)
 
@@ -105,8 +106,8 @@ HTML export → licence status.
 
 ## What works
 
-- Everything in the checklist marked ✅, verified by 63 automated tests plus the
-  30-step end-to-end smoke run against a live instance.
+- Everything in the checklist marked ✅, verified by 72 automated tests, 145
+database checks and the 30-step end-to-end smoke run against a live instance.
 - The full UI (activation, setup, login, POS, products, inventory, returns,
   sales, wholesale, reports, users, settings, backup, audit, licence) mounts and
   routes correctly (jsdom tests) and is browsable in the live preview.
@@ -137,3 +138,38 @@ The live browser preview is seeded by the smoke test so every screen has content
 store **Grace Pharmacy**, products, sales, a wholesale invoice, a credit note and
 a cashier. Sign in with `admin` / `adminpass123`. `npm run reset:data` returns to
 the true first-run activation screen.
+
+---
+
+# Phase 2 verification — project setup & database layer
+
+Verified on the same headless Linux sandbox.
+
+## Structure
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| `src/main`, `src/preload`, `src/renderer`, `src/db`, `src/services`, `src/license`, `src/editions` (pharmacy + supermarket), `docs` | ✅ | directories present; history preserved with `git mv`; both tsconfigs list them |
+| Edition modules load only when enabled | ✅ | `src/editions/*` contribute channels; `handlerMapFor(features)` mounts a module only when the licence flag is on, else `EDITION_RESTRICTED` (tests "gates edition modules in the main process") |
+| Typed data-access layer | ✅ | `src/db/repositories/` — one typed `Table<T>` per table with a declared column allowlist; unknown columns throw |
+| Secure IPC bridge (contextIsolation on, nodeIntegration off) | ✅ | `src/main/index.ts` (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`), `src/preload/index.ts` exposes only `invoke` + `appInfo`, every call re-guarded in main |
+| DB in the user app-data folder | ✅ | `join(app.getPath('userData'), 'data')`; `INFOFLEX_DATA_DIR` overrides for the harness |
+
+## Schema
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Shared tables: users, products, categories, suppliers, customers, sales, sale_items, payments, returns, return_items, stock_movements, purchases, purchase_items, day_closings, settings, audit_log, license_state | ✅ | migration v2; `npm run db:verify` writes + reads each one |
+| Pharmacy-only: product_batches (batch no, expiry, qty, cost), generic name, prescription flag | ✅ | `product_batches`; `products.generic_name`, `products.requires_prescription` |
+| Supermarket-only: departments, shelf/location, promotions, price_rules, loyalty_members, loyalty_transactions, cashier_shifts, cash_drawer_events, weighed items (PLU, price per kg), multiple barcodes, variants | ✅ | `departments`, `promotions`, `price_rules`, `loyalty_*`, `cashier_shifts`, `cash_drawer_events`, `product_barcodes`, `product_variants`; `products.shelf_location`, `plu_code`, `price_per_kg`, `is_weighed` |
+| Receipt numbers unique and sequential | ✅ | `counters` → `RCP-000001`; test "issues unique sequential receipt numbers" (also proves the UNIQUE index rejects a duplicate); credit notes unique via partial index |
+| Money stored as integer kobo | ✅ | every amount is an INTEGER column; test asserts no REAL/FLOAT/DOUBLE column exists |
+| Money/stock changes in transactions, important actions audited | ✅ | `Database.transaction` (IMMEDIATE) in sales, returns, purchases, stock, day close, shifts; audit rows verified |
+
+## DONE WHEN
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| App launches, creates the database | ✅ (harness) | `npm run dev:web` creates `./data/infoflex.db`, applies migrations v1+v2 (`PRAGMA user_version = 2`), first-run licensing screen renders. Desktop launch is still blocked by the sandbox (no display) — see phase 1 limitation 1 |
+| A test script inserts and reads a record from each table | ✅ | `npm run db:verify` → 30/30 tables, 145 checks, 0 failures |
+| Schema summary in `/docs/SCHEMA.md` | ✅ | generated by `npm run db:schema` — 30 tables, columns, indexes, edition ownership, migration history |

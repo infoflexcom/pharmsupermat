@@ -1,5 +1,5 @@
-import type { Database } from '../core/db';
-import type { DashboardSummary } from '../../shared/types';
+import type { Database } from '../db';
+import type { DashboardSummary } from '../shared/types';
 import { rangeBounds } from './helpers';
 import { listStockAlerts } from './inventory';
 

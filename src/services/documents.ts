@@ -1,5 +1,5 @@
-import type { Sale, SaleReturn, StoreProfile } from '../../shared/types';
-import { formatMoney } from '../../shared/money';
+import type { Sale, SaleReturn, StoreProfile } from '../shared/types';
+import { formatMoney } from '../shared/money';
 
 /**
  * Printable documents. Every customer facing document prints the CUSTOMER'S

@@ -1,5 +1,5 @@
-import type { Database } from '../core/db';
-import { nowIso } from '../core/db';
+import type { Database } from '../db';
+import { nowIso } from '../db';
 
 /** Atomically increments a named counter and returns a padded document number. */
 export function nextDocumentNumber(db: Database, prefix: string): string {

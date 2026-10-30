@@ -1,14 +1,14 @@
 import { createDecipheriv, randomUUID, scryptSync, sign as cryptoSign } from 'node:crypto';
 import vendorSecrets from './vendor-secrets.json';
 import { VENDOR_PUBLIC_KEY_SPKI_BASE64 } from './vendor-public-key';
-import { verifyPassword } from './auth';
-import { verifyLicenseCode, encodeLicenseCode, canonicalPayload, daysUntil } from '../../shared/license-code';
-import { featuresForEdition, isValidEdition, productNameForEdition } from '../../shared/editions';
-import type { Database } from './db';
-import { nowIso } from './db';
-import type { Edition, LicensePayload, LicenseState, LicenseStatus } from '../../shared/types';
-import { AppError, validation } from './errors';
-import { getAllSettings } from './settings';
+import { verifyPassword } from '../services/auth';
+import { verifyLicenseCode, encodeLicenseCode, canonicalPayload, daysUntil } from './code';
+import { featuresForEdition, isValidEdition, productNameForEdition } from '../shared/editions';
+import type { Database } from '../db';
+import { nowIso } from '../db';
+import type { Edition, LicensePayload, LicenseState, LicenseStatus } from '../shared/types';
+import { AppError, validation } from '../shared/errors';
+import { getAllSettings } from '../services/settings';
 
 const WARNING_DAYS = 30;
 
@@ -109,7 +109,7 @@ export interface LicenseRow {
 }
 
 export function readLicenseRow(db: Database): LicenseRow | undefined {
-  return db.handle.prepare('SELECT * FROM license WHERE id = 1').get() as LicenseRow | undefined;
+  return db.handle.prepare('SELECT * FROM license_state WHERE id = 1').get() as LicenseRow | undefined;
 }
 
 export function saveLicense(
@@ -120,7 +120,7 @@ export function saveLicense(
 ): void {
   db.handle
     .prepare(
-      `INSERT INTO license (id, edition, customer_name, license_id, activation_code, issued_at, expires_at, activated_at, activated_by, note)
+      `INSERT INTO license_state (id, edition, customer_name, license_id, activation_code, issued_at, expires_at, activated_at, activated_by, note)
        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          edition = excluded.edition,

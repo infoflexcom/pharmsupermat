@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Database } from '../src/main/core/db';
-import { createContext, type ApiContext } from '../src/main/api/context';
+import { Database } from '../src/db';
+import { createContext, type ApiContext } from '../src/services/session';
 import { invoke } from '../src/main/api/invoke';
 import type { ApiError, Edition, Product, SessionInfo, UserAccount } from '../src/shared/types';
 

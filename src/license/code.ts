@@ -1,6 +1,6 @@
 import { createPublicKey, verify as cryptoVerify } from 'node:crypto';
-import type { Edition, LicensePayload } from './types';
-import { isValidEdition } from './editions';
+import type { Edition, LicensePayload } from '../shared/types';
+import { isValidEdition } from '../shared/editions';
 
 /**
  * Licence codes are signed offline by the vendor and verified inside the app

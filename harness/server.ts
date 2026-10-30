@@ -13,10 +13,10 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import react from '@vitejs/plugin-react';
-import { Database } from '../src/main/core/db';
-import { createContext } from '../src/main/api/context';
+import { Database } from '../src/db';
+import { createContext } from '../src/services/session';
 import { invoke } from '../src/main/api/invoke';
-import { getLicenseStatus } from '../src/main/core/license';
+import { getLicenseStatus } from '../src/license/license';
 
 const ROOT = join(__dirname, '..');
 const DATA_DIR = process.env.INFOFLEX_DATA_DIR

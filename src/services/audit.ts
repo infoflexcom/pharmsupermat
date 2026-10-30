@@ -1,6 +1,6 @@
-import type { Database } from './db';
-import { nowIso } from './db';
-import type { AuditEntry } from '../../shared/types';
+import type { Database } from '../db';
+import { nowIso } from '../db';
+import type { AuditEntry } from '../shared/types';
 
 export interface AuditInput {
   action: string;

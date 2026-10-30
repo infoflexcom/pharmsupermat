@@ -46,13 +46,13 @@ describe('licensing', () => {
 
   it('stores only a salted hash of the master password', () => {
     requireMasterPassword();
-    const secrets = readFileSync(join(__dirname, '../src/main/core/vendor-secrets.json'), 'utf8');
+    const secrets = readFileSync(join(__dirname, '../src/license/vendor-secrets.json'), 'utf8');
     expect(secrets).toContain('scrypt$');
     expect(secrets).not.toContain(MASTER_PASSWORD);
     // No plaintext password anywhere in the shipped source.
     for (const file of [
-      '../src/main/core/license.ts',
-      '../src/main/core/auth.ts',
+      '../src/license/license.ts',
+      '../src/services/auth.ts',
       '../src/main/api/registry.ts'
     ]) {
       expect(readFileSync(join(__dirname, file), 'utf8')).not.toContain(MASTER_PASSWORD);
@@ -110,7 +110,7 @@ describe('licensing', () => {
   it('detects a licence row edited outside the app', async () => {
     const { h } = await bootstrap('PHARMACY');
     h.db.handle
-      .prepare("UPDATE license SET activation_code = 'IFX1.forged.signature' WHERE id = 1")
+      .prepare("UPDATE license_state SET activation_code = 'IFX1.forged.signature' WHERE id = 1")
       .run();
     const status = await callOk<LicenseStatus>(h, 'license.status');
     expect(status.state).toBe('INVALID');
@@ -123,7 +123,7 @@ describe('licensing', () => {
     const h = createHarness();
     // Issue a licence that expired an hour ago by signing it directly.
     const { signLicensePayload, buildLicensePayload, saveLicense } = await import(
-      '../src/main/core/license'
+      '../src/license/license'
     );
     const payload = buildLicensePayload({
       edition: 'PHARMACY',

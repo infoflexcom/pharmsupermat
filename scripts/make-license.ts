@@ -16,7 +16,7 @@
  * and never appears in shell history when passed this way.
  */
 import { writeFileSync } from 'node:fs';
-import { buildLicensePayload, signLicensePayload } from '../src/main/core/license';
+import { buildLicensePayload, signLicensePayload } from '../src/license/license';
 import type { Edition } from '../src/shared/types';
 
 function arg(name: string): string | undefined {

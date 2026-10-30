@@ -22,7 +22,7 @@ suffix, so the type (`Money = number` in kobo) is documented in
 ## 2. One SQLite database, append-only migrations
 
 `PRAGMA user_version` tracks the schema; migrations live in an array in
-`src/main/core/db.ts` and are applied inside a transaction on start-up.
+`src/db/migrations.ts` and are applied inside a transaction on start-up.
 WAL mode + `foreign_keys = ON` + a 5s busy timeout.
 
 *Why:* a single file is easy to back up (VACUUM INTO), copy to a flash drive and
@@ -30,7 +30,8 @@ restore, which is what an offline Nigerian retail shop actually does.
 
 ## 3. Batches are the single stock model (both editions)
 
-Stock always lives in `stock_batches`. The supermarket edition receives stock
+Stock always lives in `product_batches` (the table was `stock_batches` before
+schema v2). The supermarket edition receives stock
 into a single `DEFAULT` batch with no expiry; the pharmacy edition captures
 batch number and expiry and sells first-expiry-first-out. Expired batches are
 excluded from allocation and never sold.
@@ -44,7 +45,7 @@ FEFO for free, with expired stock refused with a clear message.
 ## 4. Licensing: signed payload + hashed master password + sealed vendor key
 
 - The vendor master password is stored only as `scrypt$N$r$p$salt$hash`
-  (`src/main/core/vendor-secrets.json`).
+  (`src/license/vendor-secrets.json`).
 - The Ed25519 signing key is stored **sealed** with AES-256-GCM under a key
   derived from the same password (separate salt). It only exists in memory, and
   only after the password is verified.
@@ -230,7 +231,7 @@ the true first-run experience. Packaged installs always start at activation.
   Electron but never fails installation; use `npm run rebuild:node` for tests or
   `npm run rebuild:electron` for the desktop app.
 
-## 25. Known limitations for this phase
+## 25. Known limitations after phase 1
 
 - The Windows NSIS installer must be built on Windows (or Linux with wine);
   the sandbox used for this phase has no wine, so only the config and the
@@ -240,3 +241,88 @@ the true first-run experience. Packaged installs always start at activation.
   verified by tests and the harness.
 - Printing requires an installed printer on the target machine; the preview and
   HTML export are always available.
+
+## 26. Phase 2: project structure and the database layer
+
+**Folder structure.** The business logic moved out of `src/main/` so that the
+Electron main process contains wiring only:
+
+| Folder | Contents |
+| --- | --- |
+| `src/db/` | SQLite wrapper, migrations, schema manifest, typed repositories |
+| `src/services/` | All business logic (products, stock, sales, returns, directory, purchases, operations, marketing, barcodes, reports, users, backup, documents, session) |
+| `src/license/` | Licence verification, activation-code format, sealed vendor key material |
+| `src/editions/` | Pharmacy and supermarket modules: tables they own + their IPC channels |
+| `src/main/api/` | The single dispatcher (`invoke`), the guard registry and shared argument helpers |
+
+*Why:* services are transport-agnostic — the Electron IPC bridge, the browser
+harness and the verifier script all call the same functions, so no guard or
+transaction can be bypassed by using a different transport.
+
+**Table renames (schema v2).** `stock_batches → product_batches`,
+`stock_moves → stock_movements`, `license → license_state`,
+`products.rx_required → products.requires_prescription`. The migration does the
+renames with `ALTER TABLE … RENAME` (SQLite ≥ 3.25), so an existing installation
+keeps its stock, licence and sales; nothing is dropped or recreated.
+
+**Typed repositories instead of an ORM.** `src/db/repositories/index.ts` binds
+one `Table<T>` per table: `all / findById / findOne / count / insert / update /
+remove`, with the writable column list declared next to the row type. Unknown
+columns throw instead of being silently interpolated into SQL. Repositories
+deliberately do **not** implement business rules: sales, stock moves, approvals
+and audit writes live in `src/services/*` where they are wrapped in one
+`IMMEDIATE` transaction.
+
+*Why:* the ORM-free approach keeps the money/stock transaction explicit and the
+packaged binary small, while the generic `Table<T>` removes the boilerplate of
+20+ hand-written DAOs.
+
+**Schema manifest + generated documentation.** `src/db/schema.ts` lists every
+table with its owning edition and a one-line description.
+`docs/SCHEMA.md` is generated from the migrated database (`npm run db:schema`),
+so the columns in the docs are the columns SQLite created.
+`npm run db:verify` writes and reads a record in every table on a throw-away
+database and fails the build if a table is missing from the manifest or a
+repository declares a column the schema does not have.
+
+**Seeded `roles` table.** The three built-in roles now exist as rows (with the
+permission list in `permissions` JSON) purely for reporting/future custom
+roles; the enforced mapping is still `src/shared/permissions.ts`, checked in the
+main process on every call.
+
+**Edition modules are mounted at runtime.** `handlerMapFor(features)` in
+`src/main/api/registry.ts` builds the live channel table from the core handlers
+plus the modules the licence enables. A channel that exists but belongs to a
+module you were not sold returns `EDITION_RESTRICTED` before any handler code
+runs — pharmacy channels are unreachable on a supermarket licence and vice
+versa. Product fields that belong to the other edition (`generic_name` vs
+`plu_code`, `price_per_kg`, …) are stripped on the way in, so they cannot be
+stored either.
+
+**Payments get their own table.** A sale records what was kept on the sale
+(`sales.total`), while `payments` records each tendered amount per method, so a
+split sale (cash + transfer) reconciles correctly per shift and per day. Split
+payments must add up to the amount tendered, enforced in `createSale`.
+
+**Money and dates.** Everything stays integer kobo (`₦1,500.00` = `150000`), no
+REAL/FLOAT column exists anywhere in the schema (asserted by a test). Timestamps
+are ISO-8601 UTC, business dates are `YYYY-MM-DD`; date ranges are UTC days.
+
+**Day closings and shifts.** One `day_closings` row per business date; closing
+a day twice is a `CONFLICT` (there is no silent re-close). A cashier shift can
+only be closed by the cashier who opened it, and every drawer open/no-sale/paid
+in/paid out/close is a `cash_drawer_events` row plus an audit entry.
+
+**Supermarket-only stock keeping.** The supermarket edition still uses the
+single `DEFAULT` batch; `product_batches` remains the one stock engine so a
+shop that buys the combined edition keeps one ledger.
+
+## 27. Known limitations after phase 2
+
+- The new tables are exposed through the IPC bridge and covered by tests, but
+  the renderer still shows the phase-1 screens (POS, products, inventory,
+  returns, reports, users, settings, backup, audit, licence). Dedicated screens
+  for suppliers/purchases, day closing, promotions/price rules, loyalty, shifts
+  and variants are the natural next step — the data layer and guards are in
+  place behind them.
+- The Windows NSIS installer still has to be built on Windows (see §25).

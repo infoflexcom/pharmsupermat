@@ -1,8 +1,8 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import Sqlite from 'better-sqlite3';
-import type { Database } from '../core/db';
-import { AppError, validation } from '../core/errors';
+import type { Database } from '../db';
+import { AppError, validation } from '../shared/errors';
 
 export interface BackupInfo {
   name: string;

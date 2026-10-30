@@ -28,6 +28,9 @@ export const PERMISSIONS = [
 
 export type Permission = (typeof PERMISSIONS)[number];
 
+/** Everything an administrator can do (used by seeding, tests and the verifier). */
+export const ALL_PERMISSIONS: Permission[] = [...PERMISSIONS];
+
 const ADMIN_PERMISSIONS: Permission[] = [...PERMISSIONS];
 
 const SUPERVISOR_PERMISSIONS: Permission[] = [

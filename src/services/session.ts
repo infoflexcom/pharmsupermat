@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import type { Database } from '../core/db';
-import type { Edition, LicenseStatus, Role } from '../../shared/types';
-import { permissionsForRole, type Permission } from '../../shared/permissions';
-import { findUserById } from '../core/auth';
-import { getLicenseStatus } from '../core/license';
+import type { Database } from '../db';
+import type { Edition, LicenseStatus, Role } from '../shared/types';
+import { permissionsForRole, type Permission } from '../shared/permissions';
+import { findUserById } from './auth';
+import { getLicenseStatus } from '../license/license';
 
 export interface Session {
   token: string;

@@ -1,14 +1,14 @@
-import type { Database } from '../core/db';
-import type { AppState, LicenseStatus, SessionInfo, SetupStatus } from '../../shared/types';
-import { nowIso } from '../core/db';
-import { AppError, validation } from '../core/errors';
-import { audit } from '../core/audit';
-import { getAllSettings, getStoreProfile, isStoreConfigured, setSettings } from '../core/settings';
-import { countAdmins } from '../core/auth';
+import type { Database } from '../db';
+import type { AppState, LicenseStatus, SessionInfo, SetupStatus } from '../shared/types';
+import { nowIso } from '../db';
+import { AppError, validation } from '../shared/errors';
+import { audit } from './audit';
+import { getAllSettings, getStoreProfile, isStoreConfigured, setSettings } from './settings';
+import { countAdmins } from './auth';
 import { createFirstAdmin } from './users';
-import { requireValidLicense } from '../core/license';
-import { featuresForEdition, productNameForEdition } from '../../shared/editions';
-import type { ApiContext, Session } from '../api/context';
+import { requireValidLicense } from '../license/license';
+import { featuresForEdition, productNameForEdition } from '../shared/editions';
+import type { ApiContext, Session } from './session';
 
 export function getSetupStatus(db: Database, license: LicenseStatus): SetupStatus {
   const adminConfigured = countAdmins(db, false) > 0;

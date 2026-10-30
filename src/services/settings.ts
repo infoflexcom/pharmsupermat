@@ -1,7 +1,7 @@
-import type { Database } from './db';
-import { nowIso } from './db';
-import type { SettingsPayload, StoreProfile } from '../../shared/types';
-import { validation } from './errors';
+import type { Database } from '../db';
+import { nowIso } from '../db';
+import type { SettingsPayload, StoreProfile } from '../shared/types';
+import { validation } from '../shared/errors';
 
 export const DEFAULT_SETTINGS: SettingsPayload = {
   storeName: '',

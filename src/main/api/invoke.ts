@@ -1,10 +1,10 @@
 import type { ApiResult, FeatureFlags, LicenseStatus } from '../../shared/types';
 import { featuresForEdition } from '../../shared/editions';
-import { AppError } from '../core/errors';
-import { getLicenseStatus } from '../core/license';
-import { audit } from '../core/audit';
-import { resolveSession, type ApiContext, type Session } from './context';
-import { HANDLER_MAP, PASSWORD_CHANGE_ALLOWLIST } from './registry';
+import { AppError } from '../../shared/errors';
+import { getLicenseStatus } from '../../license/license';
+import { audit } from '../../services/audit';
+import { resolveSession, type ApiContext, type Session } from '../../services/session';
+import { HANDLER_MAP, PASSWORD_CHANGE_ALLOWLIST, handlerMapFor } from './registry';
 
 export interface HandlerArgs {
   ctx: ApiContext;
@@ -45,11 +45,19 @@ export async function invoke(
   let session: Session | null = null;
 
   try {
-    const entry = HANDLER_MAP.get(channel);
-    if (!entry) return fail('NOT_FOUND', `Unknown request: ${channel}`);
+    const known = HANDLER_MAP.get(channel);
+    if (!known) return fail('NOT_FOUND', `Unknown request: ${channel}`);
 
     const license = getLicenseStatus(ctx.db, ctx.now());
     const features = license.features ?? LOCKED_FEATURES;
+
+    // Edition modules are mounted at runtime: a channel from a module that the
+    // licence does not include is rejected before any handler code is reached.
+    const entry = handlerMapFor(features).get(channel);
+    if (!entry) {
+      return fail('EDITION_RESTRICTED', 'This module is not included in your Infoflex edition.');
+    }
+
     session = resolveSession(ctx, payload.token);
 
     if (entry.license !== false) {

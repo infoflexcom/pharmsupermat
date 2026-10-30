@@ -1,8 +1,8 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import type { Database } from './db';
-import { nowIso } from './db';
-import type { Role, UserAccount } from '../../shared/types';
-import { AppError, validation } from './errors';
+import type { Database } from '../db';
+import { nowIso } from '../db';
+import type { Role, UserAccount } from '../shared/types';
+import { AppError, validation } from '../shared/errors';
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32, maxmem: 64 * 1024 * 1024 };
 

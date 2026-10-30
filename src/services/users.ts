@@ -1,10 +1,10 @@
-import type { Database } from '../core/db';
-import { nowIso } from '../core/db';
-import type { Edition, Role, UserAccount } from '../../shared/types';
-import { AppError, conflict, notFound, validation } from '../core/errors';
-import { audit } from '../core/audit';
-import { availableRoles } from '../../shared/editions';
-import { countAdmins, hashPassword, passwordProblem, toUserAccount } from '../core/auth';
+import type { Database } from '../db';
+import { nowIso } from '../db';
+import type { Edition, Role, UserAccount } from '../shared/types';
+import { AppError, conflict, notFound, validation } from '../shared/errors';
+import { audit } from './audit';
+import { availableRoles } from '../shared/editions';
+import { countAdmins, hashPassword, passwordProblem, toUserAccount } from './auth';
 import type { Actor } from './stock';
 
 interface UserRow {

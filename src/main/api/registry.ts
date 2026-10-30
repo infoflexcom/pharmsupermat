@@ -1,14 +1,17 @@
-import type { ApiContext, Session } from './context';
+import type { ApiContext } from '../../services/session';
 import type { FeatureFlags } from '../../shared/types';
 import type { Permission } from '../../shared/permissions';
-import { AppError, validation } from '../core/errors';
+import { AppError, validation } from '../../shared/errors';
 import type { HandlerArgs } from './invoke';
+import { actor, payloadOf, requireSession, salesActor } from './args';
+import { EDITION_MODULES, editionHandlers } from '../../editions';
 
-import { activateLicense, getLicenseStatus, signLicensePayload, buildLicensePayload } from '../core/license';
-import { getAppState, completeSetup, getSetupStatus } from '../services/app';
-import { authenticate, changePassword } from '../core/auth';
-import { audit, listAudit } from '../core/audit';
-import { getAllSettings, updateSettings } from '../core/settings';
+import { activateLicense, getLicenseStatus, signLicensePayload, buildLicensePayload } from '../../license/license';
+import { getAppState, completeSetup, getSetupStatus } from '../../services/app';
+import { authenticate, changePassword } from '../../services/auth';
+import { audit, listAudit } from '../../services/audit';
+import { getAllSettings, updateSettings } from '../../services/settings';
+import type { ProductInput } from '../../shared/types';
 import {
   createProduct,
   getProduct,
@@ -18,9 +21,9 @@ import {
   setProductActive,
   updateProduct,
   findProductByCode
-} from '../services/products';
-import { adjustStock, listBatches } from '../services/stock';
-import { listInventory, listStockAlerts, stockLedger } from '../services/inventory';
+} from '../../services/products';
+import { adjustStock, listBatches } from '../../services/stock';
+import { listInventory, listStockAlerts, stockLedger } from '../../services/inventory';
 import {
   createSale,
   getSale,
@@ -28,27 +31,40 @@ import {
   voidSale,
   approveVoid,
   rejectVoid
-} from '../services/sales';
+} from '../../services/sales';
 import {
   approveReturn,
   createReturn,
   getReturn,
   listReturns,
   rejectReturn
-} from '../services/returns';
-import { buildReport } from '../services/reports';
-import { getDashboard } from '../services/dashboard';
+} from '../../services/returns';
+import { buildReport } from '../../services/reports';
+import {
+  listCategoryRecords,
+  listCustomerRecords,
+  listSupplierRecords,
+  saveCategory,
+  saveCustomer,
+  saveSupplier,
+  type CategoryInput,
+  type CustomerInput,
+  type SupplierInput
+} from '../../services/directory';
+import { createPurchase, getPurchase, listPurchases, type PurchaseInput } from '../../services/purchases';
+import { closeDay, computeDayTotals, listDayClosings } from '../../services/operations';
+import { getDashboard } from '../../services/dashboard';
 import {
   createUser,
   listUsers,
   resetUserPassword,
   updateUser
-} from '../services/users';
-import { createBackup, listBackups, restoreBackup } from '../services/backup';
-import { buildCreditNoteDocument, buildSaleDocument } from '../services/documents';
-import { createSession, dropSession, refreshSessionPermissions } from './context';
-import { verifyVendorPassword } from '../core/license';
-import { getStoreProfile } from '../core/settings';
+} from '../../services/users';
+import { createBackup, listBackups, restoreBackup } from '../../services/backup';
+import { buildCreditNoteDocument, buildSaleDocument } from '../../services/documents';
+import { createSession, dropSession, refreshSessionPermissions } from '../../services/session';
+import { verifyVendorPassword } from '../../license/license';
+import { getStoreProfile } from '../../services/settings';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -64,27 +80,26 @@ export interface Handler {
   license?: boolean;
 }
 
-function actor(session: Session) {
-  return { userId: session.userId, username: session.username };
+/**
+ * Drops fields that belong to a module the licence does not include, so a
+ * supermarket install cannot store pharmacy columns (and vice versa) even if a
+ * renderer sends them.
+ */
+function editionSafeProduct(input: ProductInput, features: FeatureFlags): ProductInput {
+  return {
+    ...input,
+    rxRequired: features.prescriptions ? input.rxRequired : false,
+    genericName: features.pharmacy ? input.genericName : null,
+    departmentId: features.supermarket ? input.departmentId : null,
+    shelfLocation: features.supermarket ? input.shelfLocation : null,
+    pluCode: features.supermarket ? input.pluCode : null,
+    pricePerKg: features.supermarket ? input.pricePerKg : null,
+    isWeighed: features.supermarket ? input.isWeighed : false,
+    openingExpiry: features.pharmacy ? input.openingExpiry : null
+  };
 }
 
-function salesActor(session: Session) {
-  return { userId: session.userId, username: session.username, permissions: session.permissions };
-}
-
-function requireSession(args: HandlerArgs): Session {
-  if (!args.session) throw new AppError('UNAUTHENTICATED', 'Please sign in to continue.');
-  return args.session;
-}
-
-function payloadOf<T>(args: HandlerArgs): T {
-  if (!args.payload || typeof args.payload !== 'object') {
-    throw validation('Missing request details.');
-  }
-  return args.payload as T;
-}
-
-export const HANDLERS: Handler[] = [
+export const CORE_HANDLERS: Handler[] = [
   /* ---------------- application state & licensing ---------------- */
   {
     channel: 'app.state',
@@ -374,15 +389,7 @@ export const HANDLERS: Handler[] = [
     handler: (args) => {
       const session = requireSession(args);
       const input = payloadOf<Parameters<typeof createProduct>[1]>(args);
-      return createProduct(
-        args.ctx.db,
-        {
-          ...input,
-          rxRequired: args.features.prescriptions ? input.rxRequired : false,
-          openingExpiry: args.features.pharmacy ? input.openingExpiry : null
-        },
-        actor(session)
-      );
+      return createProduct(args.ctx.db, editionSafeProduct(input, args.features), actor(session));
     }
   },
   {
@@ -391,11 +398,7 @@ export const HANDLERS: Handler[] = [
     handler: (args) => {
       const session = requireSession(args);
       const input = payloadOf<Parameters<typeof updateProduct>[1]>(args);
-      return updateProduct(
-        args.ctx.db,
-        { ...input, rxRequired: args.features.prescriptions ? input.rxRequired : false },
-        actor(session)
-      );
+      return updateProduct(args.ctx.db, editionSafeProduct(input, args.features), actor(session));
     }
   },
   {
@@ -494,6 +497,92 @@ export const HANDLERS: Handler[] = [
     channel: 'inventory.list',
     permission: 'products.view',
     handler: (args) => listInventory(args.ctx.db, payloadOf<{ search?: string }>(args)?.search)
+  },
+
+  /* ---------------- directory (categories / suppliers / customers) ---------------- */
+  {
+    channel: 'directory.categories.list',
+    permission: 'products.view',
+    handler: (args) => listCategoryRecords(args.ctx.db)
+  },
+  {
+    channel: 'directory.categories.save',
+    permission: 'products.manage',
+    handler: (args) => saveCategory(args.ctx.db, payloadOf<CategoryInput>(args), actor(requireSession(args)))
+  },
+  {
+    channel: 'directory.suppliers.list',
+    permission: 'products.view',
+    handler: (args) => listSupplierRecords(args.ctx.db, payloadOf<{ search?: string }>(args)?.search)
+  },
+  {
+    channel: 'directory.suppliers.save',
+    permission: 'products.manage',
+    handler: (args) => saveSupplier(args.ctx.db, payloadOf<SupplierInput>(args), actor(requireSession(args)))
+  },
+  {
+    channel: 'directory.customers.list',
+    permission: 'pos.sell',
+    handler: (args) => listCustomerRecords(args.ctx.db, payloadOf<{ search?: string }>(args)?.search)
+  },
+  {
+    channel: 'directory.customers.save',
+    permission: 'products.manage',
+    handler: (args) => saveCustomer(args.ctx.db, payloadOf<CustomerInput>(args), actor(requireSession(args)))
+  },
+
+  /* ---------------- purchases ---------------- */
+  {
+    channel: 'purchases.list',
+    permission: 'products.view',
+    handler: (args) =>
+      listPurchases(args.ctx.db, payloadOf<{ from?: string; to?: string; supplierId?: number; limit?: number }>(args) ?? {})
+  },
+  {
+    channel: 'purchases.get',
+    permission: 'products.view',
+    handler: (args) => getPurchase(args.ctx.db, payloadOf<{ id: number }>(args).id)
+  },
+  {
+    channel: 'purchases.create',
+    permission: 'stock.receive',
+    handler: (args) => {
+      const input = payloadOf<PurchaseInput>(args);
+      // Batch/expiry only exist in the pharmacy module; a supermarket purchase
+      // simply lands in the product's PRIMARY batch.
+      const items = (input.items ?? []).map((item) => ({
+        ...item,
+        batchNo: args.features.pharmacy ? item.batchNo : undefined,
+        expiryDate: args.features.pharmacy ? item.expiryDate : null
+      }));
+      return createPurchase(args.ctx.db, { ...input, items }, actor(requireSession(args)));
+    }
+  },
+
+  /* ---------------- day closing ---------------- */
+  {
+    channel: 'operations.day.totals',
+    permission: 'reports.view.all',
+    handler: (args) => {
+      const { businessDate, openingFloat } = payloadOf<{ businessDate?: string; openingFloat?: number }>(args) ?? {};
+      const date = businessDate?.trim() || new Date().toISOString().slice(0, 10);
+      return computeDayTotals(args.ctx.db, date, openingFloat ?? 0);
+    }
+  },
+  {
+    channel: 'operations.day.list',
+    permission: 'reports.view.all',
+    handler: (args) => listDayClosings(args.ctx.db, payloadOf<{ limit?: number }>(args)?.limit ?? 60)
+  },
+  {
+    channel: 'operations.day.close',
+    permission: 'settings.manage',
+    handler: (args) =>
+      closeDay(
+        args.ctx.db,
+        payloadOf<{ businessDate: string; openingFloat?: number; countedCash: number; note?: string }>(args),
+        actor(requireSession(args))
+      )
   },
 
   /* ---------------- sales ---------------- */
@@ -813,6 +902,9 @@ export const HANDLERS: Handler[] = [
   }
 ];
 
+/** Core channels plus every edition module channel (used for lookup + docs). */
+export const HANDLERS: Handler[] = [...CORE_HANDLERS, ...editionHandlers()];
+
 /** Channels that stay available while a forced password change is pending. */
 export const PASSWORD_CHANGE_ALLOWLIST = new Set([
   'app.state',
@@ -822,6 +914,27 @@ export const PASSWORD_CHANGE_ALLOWLIST = new Set([
 ]);
 
 export const HANDLER_MAP = new Map(HANDLERS.map((h) => [h.channel, h]));
+
+/**
+ * Runtime handler table for the active edition: a module's channels are only
+ * reachable when its feature flag is on. Cached because the result only depends
+ * on the two edition flags.
+ */
+const editionMaps = new Map<string, Map<string, Handler>>();
+
+export function handlerMapFor(features: FeatureFlags): Map<string, Handler> {
+  const key = `${features.pharmacy ? 'p' : ''}${features.supermarket ? 's' : ''}`;
+  const cached = editionMaps.get(key);
+  if (cached) return cached;
+  const map = new Map<string, Handler>();
+  for (const handler of CORE_HANDLERS) map.set(handler.channel, handler);
+  for (const module of EDITION_MODULES) {
+    if (!features[module.id]) continue;
+    for (const handler of module.handlers) map.set(handler.channel, handler);
+  }
+  editionMaps.set(key, map);
+  return map;
+}
 
 export const FEATURE_FLAGS: Array<keyof FeatureFlags> = [
   'pharmacy',
@@ -833,5 +946,7 @@ export const FEATURE_FLAGS: Array<keyof FeatureFlags> = [
 export function describeHandlers(): { channel: string; permission?: string; feature?: string }[] {
   return HANDLERS.map((h) => ({ channel: h.channel, permission: h.permission, feature: h.feature }));
 }
+
+export { EDITION_MODULES };
 
 export type { ApiContext };

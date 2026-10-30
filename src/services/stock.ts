@@ -1,7 +1,7 @@
-import type { Database } from '../core/db';
-import { nowIso } from '../core/db';
-import type { Batch } from '../../shared/types';
-import { AppError, notFound, validation } from '../core/errors';
+import type { Database } from '../db';
+import { nowIso } from '../db';
+import type { Batch } from '../shared/types';
+import { AppError, notFound, validation } from '../shared/errors';
 
 export const DEFAULT_BATCH = 'DEFAULT';
 
@@ -12,7 +12,7 @@ export interface Actor {
 
 export function stockQty(db: Database, productId: number): number {
   const row = db.handle
-    .prepare('SELECT COALESCE(SUM(qty), 0) AS qty FROM stock_batches WHERE product_id = ?')
+    .prepare('SELECT COALESCE(SUM(qty), 0) AS qty FROM product_batches WHERE product_id = ?')
     .get(productId) as { qty: number };
   return row.qty;
 }
@@ -21,7 +21,7 @@ export function listBatches(db: Database, productId: number): Batch[] {
   const rows = db.handle
     .prepare(
       `SELECT id, product_id, batch_no, expiry_date, qty, cost_price, created_at
-       FROM stock_batches WHERE product_id = ? ORDER BY
+       FROM product_batches WHERE product_id = ? ORDER BY
          CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END, expiry_date, id`
     )
     .all(productId) as {
@@ -52,7 +52,7 @@ function findBatch(
 ): { id: number; qty: number } | undefined {
   return db.handle
     .prepare(
-      `SELECT id, qty FROM stock_batches
+      `SELECT id, qty FROM product_batches
        WHERE product_id = ? AND batch_no = ? AND IFNULL(expiry_date, '') = IFNULL(?, '')`
     )
     .get(productId, batchNo, expiryDate) as { id: number; qty: number } | undefined;
@@ -91,12 +91,12 @@ export function receiveStock(
   let batch = findBatch(db, productId, batchNo, expiryDate);
   if (batch) {
     db.handle
-      .prepare('UPDATE stock_batches SET qty = qty + ?, cost_price = ?, updated_at = ? WHERE id = ?')
+      .prepare('UPDATE product_batches SET qty = qty + ?, cost_price = ?, updated_at = ? WHERE id = ?')
       .run(qty, costPrice, now, batch.id);
   } else {
     const result = db.handle
       .prepare(
-        `INSERT INTO stock_batches (product_id, batch_no, expiry_date, qty, cost_price, created_at, updated_at)
+        `INSERT INTO product_batches (product_id, batch_no, expiry_date, qty, cost_price, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
       .run(productId, batchNo, expiryDate, qty, costPrice, now, now);
@@ -105,7 +105,7 @@ export function receiveStock(
 
   db.handle
     .prepare(
-      `INSERT INTO stock_moves (product_id, batch_id, qty_change, type, ref_type, ref_id, note, user_id, created_at)
+      `INSERT INTO stock_movements (product_id, batch_id, qty_change, type, ref_type, ref_id, note, user_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
@@ -145,7 +145,7 @@ export function allocateStock(
   const today = asOf.toISOString().slice(0, 10);
   const batches = db.handle
     .prepare(
-      `SELECT id, batch_no, qty, cost_price, expiry_date FROM stock_batches
+      `SELECT id, batch_no, qty, cost_price, expiry_date FROM product_batches
        WHERE product_id = ? AND qty > 0
        ORDER BY CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END, expiry_date, id`
     )
@@ -197,11 +197,11 @@ export function commitSaleAllocation(
 ): void {
   const now = nowIso();
   db.handle
-    .prepare('UPDATE stock_batches SET qty = qty - ?, updated_at = ? WHERE id = ?')
+    .prepare('UPDATE product_batches SET qty = qty - ?, updated_at = ? WHERE id = ?')
     .run(allocation.qty, now, allocation.batchId);
   db.handle
     .prepare(
-      `INSERT INTO stock_moves (product_id, batch_id, qty_change, type, ref_type, ref_id, note, user_id, created_at)
+      `INSERT INTO stock_movements (product_id, batch_id, qty_change, type, ref_type, ref_id, note, user_id, created_at)
        VALUES (?, ?, ?, 'SALE', ?, ?, ?, ?, ?)`
     )
     .run(
@@ -227,11 +227,11 @@ export function adjustStock(
   if (!input.reason.trim()) throw validation('A reason is required for a stock adjustment.');
   const batch = input.batchId
     ? (db.handle
-        .prepare('SELECT id, qty FROM stock_batches WHERE id = ? AND product_id = ?')
+        .prepare('SELECT id, qty FROM product_batches WHERE id = ? AND product_id = ?')
         .get(input.batchId, input.productId) as { id: number; qty: number } | undefined)
     : (db.handle
         .prepare(
-          `SELECT id, qty FROM stock_batches WHERE product_id = ? ORDER BY qty DESC LIMIT 1`
+          `SELECT id, qty FROM product_batches WHERE product_id = ? ORDER BY qty DESC LIMIT 1`
         )
         .get(input.productId) as { id: number; qty: number } | undefined);
   if (!batch) throw notFound('Stock batch');
@@ -239,11 +239,11 @@ export function adjustStock(
   if (delta === 0) return;
   const now = nowIso();
   db.handle
-    .prepare('UPDATE stock_batches SET qty = ?, updated_at = ? WHERE id = ?')
+    .prepare('UPDATE product_batches SET qty = ?, updated_at = ? WHERE id = ?')
     .run(input.newQty, now, batch.id);
   db.handle
     .prepare(
-      `INSERT INTO stock_moves (product_id, batch_id, qty_change, type, note, user_id, created_at)
+      `INSERT INTO stock_movements (product_id, batch_id, qty_change, type, note, user_id, created_at)
        VALUES (?, ?, ?, 'ADJUSTMENT', ?, ?, ?)`
     )
     .run(input.productId, batch.id, delta, input.reason, actor.userId, now);

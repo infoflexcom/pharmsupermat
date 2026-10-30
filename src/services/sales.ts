@@ -1,5 +1,5 @@
-import type { Database } from '../core/db';
-import { nowIso } from '../core/db';
+import type { Database } from '../db';
+import { nowIso } from '../db';
 import type {
   FeatureFlags,
   PaymentMethod,
@@ -8,13 +8,13 @@ import type {
   SaleItem,
   SaleSummary,
   StoreProfile
-} from '../../shared/types';
-import { AppError, notFound, validation } from '../core/errors';
-import { audit } from '../core/audit';
+} from '../shared/types';
+import { AppError, notFound, validation } from '../shared/errors';
+import { audit } from './audit';
 import { allocateStock, commitSaleAllocation, receiveStock, type Actor } from './stock';
 import { requireProduct } from './products';
 import { nextDocumentNumber, rangeBounds } from './helpers';
-import { getStoreProfile } from '../core/settings';
+import { getStoreProfile } from './settings';
 
 export interface SalesActor extends Actor {
   permissions: readonly string[];
@@ -49,6 +49,9 @@ interface SaleRow {
   store_phone: string;
   note: string | null;
   created_at: string;
+  customer_id: number | null;
+  loyalty_member_id: number | null;
+  shift_id: number | null;
 }
 
 interface SaleItemRow {
@@ -85,7 +88,11 @@ function mapItem(row: SaleItemRow): SaleItem {
   };
 }
 
-function mapSale(row: SaleRow, items?: SaleItem[]): Sale {
+function mapSale(
+  row: SaleRow,
+  items?: SaleItem[],
+  payments: { id: number; method: string; amount: number; reference: string | null }[] = []
+): Sale {
   return {
     id: row.id,
     receiptNo: row.receipt_no,
@@ -115,6 +122,10 @@ function mapSale(row: SaleRow, items?: SaleItem[]): Sale {
     storePhone: row.store_phone,
     note: row.note,
     createdAt: row.created_at,
+    customerId: row.customer_id,
+    loyaltyMemberId: row.loyalty_member_id,
+    shiftId: row.shift_id,
+    payments,
     items
   };
 }
@@ -141,6 +152,16 @@ export function createSale(
   }
   if (!Number.isInteger(input.amountPaid) || input.amountPaid < 0) {
     throw validation('Amount paid is invalid.');
+  }
+  const splitPayments = input.payments ?? [];
+  if (splitPayments.length) {
+    if (splitPayments.some((p) => !PAYMENT_METHODS.includes(p.method) || !Number.isInteger(p.amount) || p.amount <= 0)) {
+      throw validation('Each split payment needs a valid method and a positive amount.');
+    }
+    const splitTotal = splitPayments.reduce((sum, p) => sum + p.amount, 0);
+    if (splitTotal !== input.amountPaid) {
+      throw validation('Split payments must add up to the amount tendered.');
+    }
   }
 
   const store: StoreProfile = getStoreProfile(db);
@@ -222,8 +243,9 @@ export function createSale(
         `INSERT INTO sales
           (receipt_no, doc_type, customer_name, customer_phone, customer_address, prescription_ref,
            subtotal, discount, tax, total, amount_paid, change_due, payment_method, status,
-           price_override_by, user_id, username, store_name, store_address, store_phone, note, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, ?, ?)`
+           price_override_by, user_id, username, store_name, store_address, store_phone, note, created_at,
+           customer_id, loyalty_member_id, shift_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         receiptNo,
@@ -245,9 +267,23 @@ export function createSale(
         store.storeAddress,
         store.storePhone,
         input.note?.trim() || null,
-        now
+        now,
+        input.customerId ?? null,
+        input.loyaltyMemberId ?? null,
+        input.shiftId ?? null
       );
     const saleId = Number(result.lastInsertRowid);
+
+    const insertPayment = db.handle.prepare(
+      'INSERT INTO payments (sale_id, method, amount, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    if (splitPayments.length) {
+      for (const payment of splitPayments) {
+        insertPayment.run(saleId, payment.method, payment.amount, payment.reference?.trim() || null, actor.userId, now);
+      }
+    } else {
+      insertPayment.run(saleId, input.paymentMethod, total, null, actor.userId, now);
+    }
 
     const insertItem = db.handle.prepare(
       `INSERT INTO sale_items
@@ -305,7 +341,10 @@ export function getSale(db: Database, id: number): Sale {
   const items = db.handle
     .prepare('SELECT * FROM sale_items WHERE sale_id = ? ORDER BY id')
     .all(id) as SaleItemRow[];
-  return mapSale(row, items.map(mapItem));
+  const payments = db.handle
+    .prepare('SELECT id, method, amount, reference FROM payments WHERE sale_id = ? ORDER BY id')
+    .all(id) as { id: number; method: string; amount: number; reference: string | null }[];
+  return mapSale(row, items.map(mapItem), payments);
 }
 
 export interface SaleQuery {
@@ -383,7 +422,7 @@ function restockSale(db: Database, sale: Sale, actor: Actor, reason: string): vo
     // Return the goods to the exact batch (and expiry) they came from.
     const batch = item.batchId
       ? (db.handle
-          .prepare('SELECT batch_no, expiry_date FROM stock_batches WHERE id = ?')
+          .prepare('SELECT batch_no, expiry_date FROM product_batches WHERE id = ?')
           .get(item.batchId) as { batch_no: string; expiry_date: string | null } | undefined)
       : undefined;
     receiveStock(db, item.productId, item.qty, {

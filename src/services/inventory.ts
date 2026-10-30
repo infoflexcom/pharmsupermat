@@ -1,5 +1,5 @@
-import type { Database } from '../core/db';
-import type { Product } from '../../shared/types';
+import type { Database } from '../db';
+import type { Product } from '../shared/types';
 import { listProducts } from './products';
 import { listBatches } from './stock';
 
@@ -27,7 +27,7 @@ export function listStockAlerts(db: Database, expiryWindowDays = 90): StockAlert
   const rows = db.handle
     .prepare(
       `SELECT b.product_id, p.sku, p.name, b.batch_no, b.expiry_date, b.qty
-       FROM stock_batches b JOIN products p ON p.id = b.product_id
+       FROM product_batches b JOIN products p ON p.id = b.product_id
        WHERE b.qty > 0 AND b.expiry_date IS NOT NULL AND b.expiry_date <= ?
        ORDER BY b.expiry_date ASC`
     )
@@ -75,7 +75,7 @@ export function stockLedger(
   const rows = db.handle
     .prepare(
       `SELECT id, created_at, type, qty_change, note, ref_type, ref_id
-       FROM stock_moves WHERE product_id = ? ORDER BY id DESC LIMIT ?`
+       FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT ?`
     )
     .all(productId, Math.min(Math.max(limit, 1), 500)) as {
     id: number;
