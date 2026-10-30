@@ -11,6 +11,8 @@ export type ErrorCode =
   | 'EDITION_RESTRICTED'
   | 'INSUFFICIENT_STOCK'
   | 'APPROVAL_REQUIRED'
+  | 'SHIFT_REQUIRED'
+  | 'PRINT_BLOCKED'
   | 'INTERNAL';
 
 export class AppError extends Error {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { call } from '../api';
 import { useApi, useApp } from '../state';
-import type { SettingsPayload } from '../../../shared/types';
+import { RECEIPT_LAYOUTS, type ReceiptLayout, type SettingsPayload } from '../../../shared/types';
 import { formatMoney, moneyToInput, parseMoneyInput } from '../../../shared/money';
 import { Alert, Button, Card, Field, Input, PageHead, Select } from '../components/ui';
 
@@ -211,6 +211,155 @@ export default function SettingsPage() {
           <span className="small muted">
             Cashier return limit is currently {formatMoney(parseMoneyInput(returnLimit))}
           </span>
+        </div>
+      </Card>
+
+      <Card title="Till & receipts">
+        <div className="form-grid">
+          <Field label="VAT" hint="When on, VAT is added on top of the discounted subtotal.">
+            <Select
+              value={settings.vatEnabled ? 'yes' : 'no'}
+              onChange={(e) => setSettings({ ...settings, vatEnabled: e.target.value === 'yes' })}
+            >
+              <option value="no">Off</option>
+              <option value="yes">On</option>
+            </Select>
+          </Field>
+          <Field label="VAT rate (%)">
+            <Input
+              type="number"
+              min={0}
+              step="0.01"
+              value={settings.vatRate}
+              onChange={(e) => setSettings({ ...settings, vatRate: Number(e.target.value) })}
+            />
+          </Field>
+          <Field
+            label="Discount cap for non-admins (%)"
+            hint="Cashiers and supervisors cannot discount beyond this without an administrator."
+          >
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={settings.maxDiscountPercent}
+              onChange={(e) => setSettings({ ...settings, maxDiscountPercent: Number(e.target.value) })}
+            />
+          </Field>
+          <Field label="Default receipt layout">
+            <Select
+              value={settings.receiptLayout}
+              onChange={(e) => setSettings({ ...settings, receiptLayout: e.target.value as ReceiptLayout })}
+            >
+              {RECEIPT_LAYOUTS.map((layout) => (
+                <option key={layout.value} value={layout.value}>
+                  {layout.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Cash payments">
+            <Select
+              value={settings.paymentCash ? 'yes' : 'no'}
+              onChange={(e) => setSettings({ ...settings, paymentCash: e.target.value === 'yes' })}
+            >
+              <option value="yes">Enabled</option>
+              <option value="no">Disabled</option>
+            </Select>
+          </Field>
+          <Field label="Bank transfer payments">
+            <Select
+              value={settings.paymentTransfer ? 'yes' : 'no'}
+              onChange={(e) => setSettings({ ...settings, paymentTransfer: e.target.value === 'yes' })}
+            >
+              <option value="yes">Enabled</option>
+              <option value="no">Disabled</option>
+            </Select>
+          </Field>
+          <Field label="Card / POS payments">
+            <Select
+              value={settings.paymentPos ? 'yes' : 'no'}
+              onChange={(e) => setSettings({ ...settings, paymentPos: e.target.value === 'yes' })}
+            >
+              <option value="yes">Enabled</option>
+              <option value="no">Disabled</option>
+            </Select>
+          </Field>
+          <Field label="Credit sales" hint="Only registered customers with a credit limit can buy on account.">
+            <Select
+              value={settings.paymentCredit ? 'yes' : 'no'}
+              onChange={(e) => setSettings({ ...settings, paymentCredit: e.target.value === 'yes' })}
+            >
+              <option value="yes">Enabled</option>
+              <option value="no">Disabled</option>
+            </Select>
+          </Field>
+          <Field label="“Powered by” footer" hint="Small Infoflex line under the receipt footer. It never replaces your store name.">
+            <Select
+              value={settings.poweredByFooter ? 'yes' : 'no'}
+              onChange={(e) => setSettings({ ...settings, poweredByFooter: e.target.value === 'yes' })}
+            >
+              <option value="yes">Show</option>
+              <option value="no">Hide</option>
+            </Select>
+          </Field>
+          <Field label="Customer-facing display" hint="Offers a large second-screen view of the basket and total.">
+            <Select
+              value={settings.customerDisplay ? 'yes' : 'no'}
+              onChange={(e) => setSettings({ ...settings, customerDisplay: e.target.value === 'yes' })}
+            >
+              <option value="no">Off</option>
+              <option value="yes">On</option>
+            </Select>
+          </Field>
+          {state?.features.supermarket ? (
+            <Field label="Require an open cashier shift" hint="Block sales until the cashier opens a shift with a float.">
+              <Select
+                value={settings.requireShift ? 'yes' : 'no'}
+                onChange={(e) => setSettings({ ...settings, requireShift: e.target.value === 'yes' })}
+              >
+                <option value="no">Off</option>
+                <option value="yes">On</option>
+              </Select>
+            </Field>
+          ) : null}
+          {state?.features.supermarket ? (
+            <>
+              <Field label="Loyalty points per ₦100">
+                <Input
+                  type="number"
+                  min={0}
+                  value={settings.loyaltyPointsPer100}
+                  onChange={(e) => setSettings({ ...settings, loyaltyPointsPer100: Number(e.target.value) })}
+                />
+              </Field>
+              <Field label="Value of one point (₦)">
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={moneyToInput(settings.loyaltyPointValue)}
+                  onChange={(e) =>
+                    setSettings({ ...settings, loyaltyPointValue: parseMoneyInput(e.target.value) })
+                  }
+                />
+              </Field>
+              <Field label="Redeem points at the till">
+                <Select
+                  value={settings.loyaltyRedeemEnabled ? 'yes' : 'no'}
+                  onChange={(e) => setSettings({ ...settings, loyaltyRedeemEnabled: e.target.value === 'yes' })}
+                >
+                  <option value="yes">Allowed</option>
+                  <option value="no">Off</option>
+                </Select>
+              </Field>
+            </>
+          ) : null}
+        </div>
+        <div className="row tight" style={{ marginTop: 16 }}>
+          <Button onClick={save} disabled={busy}>
+            {busy ? 'Saving…' : 'Save till settings'}
+          </Button>
         </div>
       </Card>
 

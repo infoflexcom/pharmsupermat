@@ -10,7 +10,7 @@ Infoflex keeps everything in one SQLite file inside the OS application-data fold
 
 Set `INFOFLEX_DATA_DIR` to override the folder (the browser preview and the smoke test do this).
 
-Schema version: **5** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy, v4 licence_periods_hmac_and_attempt_throttle, v5 product_packs_brands_stock_counts_and_grn.
+Schema version: **6** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy, v4 licence_periods_hmac_and_attempt_throttle, v5 product_packs_brands_stock_counts_and_grn, v6 pos_credit_promotions_and_receipts.
 
 ## Rules that apply to every table
 
@@ -23,7 +23,7 @@ Schema version: **5** (`PRAGMA user_version`), migrations: v1 initial, v2 shared
 
 ## Tables by edition
 
-- **Shared (all editions):** `users`, `roles`, `settings`, `audit_log`, `license_state`, `license_history`, `license_attempts`, `license_guard`, `categories`, `suppliers`, `customers`, `products`, `stock_movements`, `sales`, `sale_items`, `payments`, `returns`, `return_items`, `purchases`, `purchase_items`, `day_closings`, `counters`, `sessions_meta`
+- **Shared (all editions):** `users`, `roles`, `settings`, `audit_log`, `license_state`, `license_history`, `license_attempts`, `license_guard`, `held_sales`, `document_prints`, `categories`, `suppliers`, `customers`, `products`, `stock_movements`, `sales`, `sale_items`, `payments`, `returns`, `return_items`, `purchases`, `purchase_items`, `day_closings`, `counters`, `sessions_meta`
 - **Pharmacy module:** `product_batches`
 - **Supermarket module:** `stock_counts`, `stock_count_items`, `departments`, `promotions`, `price_rules`, `loyalty_members`, `loyalty_transactions`, `cashier_shifts`, `cash_drawer_events`, `product_barcodes`, `product_variants`
 
@@ -167,6 +167,41 @@ Per-install random secret used to derive the licence HMAC key.
 | `id` | INTEGER | yes | — | PK |
 | `secret` | TEXT | NOT NULL | — |  |
 | `created_at` | TEXT | NOT NULL | — |  |
+
+### `held_sales`
+
+Parked (held) baskets that can be recalled at the till; payload holds the cart as JSON.
+
+| Column | Type | Null | Default | Key |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes | — | PK |
+| `hold_no` | TEXT | NOT NULL | — |  |
+| `label` | TEXT | yes | — |  |
+| `payload` | TEXT | NOT NULL | — |  |
+| `lines_count` | INTEGER | NOT NULL | `0` |  |
+| `total` | INTEGER | NOT NULL | `0` |  |
+| `customer_name` | TEXT | yes | — |  |
+| `user_id` | INTEGER | NOT NULL | — |  |
+| `username` | TEXT | NOT NULL | — |  |
+| `created_at` | TEXT | NOT NULL | — |  |
+
+Indexes: `idx_held_sales_created`
+
+### `document_prints`
+
+Every receipt/invoice print, layout and DUPLICATE reprint trail.
+
+| Column | Type | Null | Default | Key |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes | — | PK |
+| `sale_id` | INTEGER | NOT NULL | — |  |
+| `layout` | TEXT | NOT NULL | — |  |
+| `duplicate` | INTEGER | NOT NULL | `0` |  |
+| `user_id` | INTEGER | yes | — |  |
+| `username` | TEXT | yes | — |  |
+| `created_at` | TEXT | NOT NULL | — |  |
+
+Indexes: `idx_document_prints_sale`
 
 ### `categories`
 
@@ -316,6 +351,16 @@ Sales and wholesale invoices, with store snapshot and void trail. Never deleted.
 | `customer_id` | INTEGER | yes | — |  |
 | `loyalty_member_id` | INTEGER | yes | — |  |
 | `shift_id` | INTEGER | yes | — |  |
+| `tier` | TEXT | NOT NULL | `'RETAIL'` |  |
+| `balance_due` | INTEGER | NOT NULL | `0` |  |
+| `promo_discount` | INTEGER | NOT NULL | `0` |  |
+| `item_discount` | INTEGER | NOT NULL | `0` |  |
+| `loyalty_points` | INTEGER | NOT NULL | `0` |  |
+| `loyalty_redeemed` | INTEGER | NOT NULL | `0` |  |
+| `loyalty_value` | INTEGER | NOT NULL | `0` |  |
+| `vat_rate` | INTEGER | NOT NULL | `0` |  |
+| `print_count` | INTEGER | NOT NULL | `0` |  |
+| `last_printed_at` | TEXT | yes | — |  |
 
 Indexes: `idx_sales_created`, `idx_sales_customer`, `idx_sales_user`
 
@@ -339,6 +384,9 @@ Immutable line snapshots: SKU, name, qty, price, cost, batch.
 | `batch_no` | TEXT | yes | — |  |
 | `rx_required` | INTEGER | NOT NULL | `0` |  |
 | `is_weighed` | INTEGER | NOT NULL | `0` |  |
+| `line_discount` | INTEGER | NOT NULL | `0` |  |
+| `promotion_id` | INTEGER | yes | — |  |
+| `promotion_name` | TEXT | yes | — |  |
 
 Indexes: `idx_sale_items_product`, `idx_sale_items_sale`
 
@@ -355,8 +403,9 @@ One row per money movement against a sale (cash, transfer, POS, split).
 | `reference` | TEXT | yes | — |  |
 | `user_id` | INTEGER | yes | — |  |
 | `created_at` | TEXT | NOT NULL | — |  |
+| `shift_id` | INTEGER | yes | — |  |
 
-Indexes: `idx_payments_created`, `idx_payments_sale`
+Indexes: `idx_payments_created`, `idx_payments_sale`, `idx_payments_shift`
 
 ### `returns`
 
@@ -745,6 +794,7 @@ applies every newer migration inside a transaction (rollback on error) and bumps
 | 3 | account_lockout_store_profile_and_idle_policy |
 | 4 | licence_periods_hmac_and_attempt_throttle |
 | 5 | product_packs_brands_stock_counts_and_grn |
+| 6 | pos_credit_promotions_and_receipts |
 
 To add a migration: append a `{ version, name, sql }` entry, add any new table/column to
 `src/db/schema.ts`, run `npm run db:verify` (writes and reads a row in every table, checks the
@@ -757,4 +807,4 @@ manifest against the database) and `npm run db:schema` to refresh this page.
 SELECT 'sales', COUNT(*) FROM sales UNION ALL SELECT 'products', COUNT(*) FROM products;
 ```
 
-_35 tables documented; generated 2026-10-30T21:49:14.815Z by scripts/gen-schema-doc.ts._
+_37 tables documented; generated 2026-10-30T23:46:37.044Z by scripts/gen-schema-doc.ts._

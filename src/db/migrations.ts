@@ -683,6 +683,88 @@ export const MIGRATIONS: Migration[] = [
         ('label_default_copies', '1', datetime('now'));
     `
   }
+,
+  {
+    version: 6,
+    name: 'pos_credit_promotions_and_receipts',
+    sql: /* sql */ `
+      /* ---------------------------------------------------------------- *
+       * Point of sale: retail/wholesale tiers, promotions, loyalty and    *
+       * credit balances, plus the printing trail.                         *
+       * ---------------------------------------------------------------- */
+      ALTER TABLE sales ADD COLUMN tier TEXT NOT NULL DEFAULT 'RETAIL';
+      ALTER TABLE sales ADD COLUMN balance_due INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sales ADD COLUMN promo_discount INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sales ADD COLUMN item_discount INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sales ADD COLUMN loyalty_points INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sales ADD COLUMN loyalty_redeemed INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sales ADD COLUMN loyalty_value INTEGER NOT NULL DEFAULT 0;
+      /* VAT rate used on this document, in basis points (750 = 7.50%). */
+      ALTER TABLE sales ADD COLUMN vat_rate INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sales ADD COLUMN print_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sales ADD COLUMN last_printed_at TEXT;
+
+      /* A line remembers its own manual discount and any promotion used. */
+      ALTER TABLE sale_items ADD COLUMN line_discount INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sale_items ADD COLUMN promotion_id INTEGER;
+      ALTER TABLE sale_items ADD COLUMN promotion_name TEXT;
+
+      /* Money taken at the till belongs to the drawer shift it was taken in,
+         which also lets credit payments collected later count towards the
+         cashier's expected cash. */
+      ALTER TABLE payments ADD COLUMN shift_id INTEGER;
+      CREATE INDEX IF NOT EXISTS idx_payments_shift ON payments(shift_id);
+
+      /* Held (parked) baskets: the till can recall a sale later, offline. */
+      CREATE TABLE IF NOT EXISTS held_sales (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        hold_no TEXT NOT NULL UNIQUE,
+        label TEXT,
+        payload TEXT NOT NULL,
+        lines_count INTEGER NOT NULL DEFAULT 0,
+        total INTEGER NOT NULL DEFAULT 0,
+        customer_name TEXT,
+        user_id INTEGER NOT NULL,
+        username TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_held_sales_created ON held_sales(created_at DESC);
+
+      /* Every receipt/invoice print and reprint, so DUPLICATE is provable. */
+      CREATE TABLE IF NOT EXISTS document_prints (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sale_id INTEGER NOT NULL REFERENCES sales(id),
+        layout TEXT NOT NULL,
+        duplicate INTEGER NOT NULL DEFAULT 0,
+        user_id INTEGER,
+        username TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_document_prints_sale ON document_prints(sale_id);
+
+      /* ---------------------------------------------------------------- *
+       * Settings added for the till: payment methods, discount cap, VAT,  *
+       * receipt layout/footer and loyalty rates.                          *
+       * ---------------------------------------------------------------- */
+      /* Prices on the shelf are treated as VAT-exclusive when VAT is on, so   *
+       * the tax line is added on top of the discounted subtotal.              */
+      INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES
+        ('vat_enabled', 'false', datetime('now')),
+        ('vat_rate', '7.5', datetime('now')),
+        ('max_discount_percent', '10', datetime('now')),
+        ('payment_cash', 'true', datetime('now')),
+        ('payment_transfer', 'true', datetime('now')),
+        ('payment_pos', 'true', datetime('now')),
+        ('payment_credit', 'false', datetime('now')),
+        ('powered_by_footer', 'true', datetime('now')),
+        ('receipt_layout', 'THERMAL_80', datetime('now')),
+        ('customer_display', 'false', datetime('now')),
+        ('require_shift', 'false', datetime('now')),
+        ('loyalty_points_per_100', '1', datetime('now')),
+        ('loyalty_point_value', '100', datetime('now')),
+        ('loyalty_redeem_enabled', 'true', datetime('now'));
+    `
+  }
 ];
 
 export function migrate(db: SqliteDatabase): void {

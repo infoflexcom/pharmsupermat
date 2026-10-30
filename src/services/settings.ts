@@ -1,6 +1,6 @@
 import type { Database } from '../db';
 import { nowIso } from '../db';
-import type { SettingsPayload, StoreProfile } from '../shared/types';
+import { RECEIPT_LAYOUTS, type SettingsPayload, type StoreProfile } from '../shared/types';
 import { validation } from '../shared/errors';
 
 export const DEFAULT_SETTINGS: SettingsPayload = {
@@ -17,7 +17,21 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
   returnWindowDays: 7,
   lowStockAlerts: true,
   licenseExpiryWarningDays: 30,
-  idleTimeoutMinutes: 15
+  idleTimeoutMinutes: 15,
+  vatEnabled: false,
+  vatRate: 7.5,
+  maxDiscountPercent: 10,
+  paymentCash: true,
+  paymentTransfer: true,
+  paymentPos: true,
+  paymentCredit: false,
+  poweredByFooter: true,
+  receiptLayout: 'THERMAL_80',
+  customerDisplay: false,
+  requireShift: true,
+  loyaltyPointsPer100: 1,
+  loyaltyPointValue: 100,
+  loyaltyRedeemEnabled: true
 };
 
 /** settings row names, kept in one place so reads and writes cannot drift. */
@@ -35,7 +49,21 @@ const KEYS: Record<keyof SettingsPayload, string> = {
   returnWindowDays: 'return_window_days',
   lowStockAlerts: 'low_stock_alerts',
   licenseExpiryWarningDays: 'license_expiry_warning_days',
-  idleTimeoutMinutes: 'idle_timeout_minutes'
+  idleTimeoutMinutes: 'idle_timeout_minutes',
+  vatEnabled: 'vat_enabled',
+  vatRate: 'vat_rate',
+  maxDiscountPercent: 'max_discount_percent',
+  paymentCash: 'payment_cash',
+  paymentTransfer: 'payment_transfer',
+  paymentPos: 'payment_pos',
+  paymentCredit: 'payment_credit',
+  poweredByFooter: 'powered_by_footer',
+  receiptLayout: 'receipt_layout',
+  customerDisplay: 'customer_display',
+  requireShift: 'require_shift',
+  loyaltyPointsPer100: 'loyalty_points_per_100',
+  loyaltyPointValue: 'loyalty_point_value',
+  loyaltyRedeemEnabled: 'loyalty_redeem_enabled'
 };
 
 export const MIN_IDLE_MINUTES = 1;
@@ -62,6 +90,12 @@ export function getAllSettings(db: Database): SettingsPayload {
     if (raw === undefined) return fallback;
     return raw === 'true' || raw === '1';
   };
+  const readDecimal = (key: keyof SettingsPayload, fallback: number) => {
+    const raw = stored.get(KEYS[key]);
+    if (raw === undefined) return fallback;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
   return {
     storeName: readString('storeName', DEFAULT_SETTINGS.storeName),
     storeAddress: readString('storeAddress', DEFAULT_SETTINGS.storeAddress),
@@ -79,7 +113,21 @@ export function getAllSettings(db: Database): SettingsPayload {
       'licenseExpiryWarningDays',
       DEFAULT_SETTINGS.licenseExpiryWarningDays
     ),
-    idleTimeoutMinutes: readInt('idleTimeoutMinutes', DEFAULT_SETTINGS.idleTimeoutMinutes)
+    idleTimeoutMinutes: readInt('idleTimeoutMinutes', DEFAULT_SETTINGS.idleTimeoutMinutes),
+    vatEnabled: readBool('vatEnabled', DEFAULT_SETTINGS.vatEnabled),
+    vatRate: readDecimal('vatRate', DEFAULT_SETTINGS.vatRate),
+    maxDiscountPercent: readInt('maxDiscountPercent', DEFAULT_SETTINGS.maxDiscountPercent),
+    paymentCash: readBool('paymentCash', DEFAULT_SETTINGS.paymentCash),
+    paymentTransfer: readBool('paymentTransfer', DEFAULT_SETTINGS.paymentTransfer),
+    paymentPos: readBool('paymentPos', DEFAULT_SETTINGS.paymentPos),
+    paymentCredit: readBool('paymentCredit', DEFAULT_SETTINGS.paymentCredit),
+    poweredByFooter: readBool('poweredByFooter', DEFAULT_SETTINGS.poweredByFooter),
+    receiptLayout: (readString('receiptLayout', DEFAULT_SETTINGS.receiptLayout) as SettingsPayload['receiptLayout']) ?? 'THERMAL_80',
+    customerDisplay: readBool('customerDisplay', DEFAULT_SETTINGS.customerDisplay),
+    requireShift: readBool('requireShift', DEFAULT_SETTINGS.requireShift),
+    loyaltyPointsPer100: readInt('loyaltyPointsPer100', DEFAULT_SETTINGS.loyaltyPointsPer100),
+    loyaltyPointValue: readInt('loyaltyPointValue', DEFAULT_SETTINGS.loyaltyPointValue),
+    loyaltyRedeemEnabled: readBool('loyaltyRedeemEnabled', DEFAULT_SETTINGS.loyaltyRedeemEnabled)
   };
 }
 
@@ -170,6 +218,29 @@ export function updateSettings(db: Database, patch: Partial<SettingsPayload>): S
       throw validation(`Auto sign-out must be between ${MIN_IDLE_MINUTES} and ${MAX_IDLE_MINUTES} minutes.`);
     }
   }
+  if (patch.maxDiscountPercent !== undefined) {
+    if (
+      !Number.isInteger(patch.maxDiscountPercent) ||
+      patch.maxDiscountPercent < 0 ||
+      patch.maxDiscountPercent > 100
+    ) {
+      throw validation('The discount cap must be a whole percentage between 0 and 100.');
+    }
+  }
+  if (patch.vatRate !== undefined) {
+    if (!Number.isFinite(patch.vatRate) || patch.vatRate < 0 || patch.vatRate > 100) {
+      throw validation('VAT must be a percentage between 0 and 100.');
+    }
+  }
+  if (patch.loyaltyPointsPer100 !== undefined && (!Number.isInteger(patch.loyaltyPointsPer100) || patch.loyaltyPointsPer100 < 0)) {
+    throw validation('Loyalty points per ₦100 must be zero or more.');
+  }
+  if (patch.loyaltyPointValue !== undefined && (!Number.isInteger(patch.loyaltyPointValue) || patch.loyaltyPointValue < 0)) {
+    throw validation('The value of one loyalty point must be a positive amount.');
+  }
+  if (patch.receiptLayout !== undefined && !RECEIPT_LAYOUTS.some((layout) => layout.value === patch.receiptLayout)) {
+    throw validation('Choose a valid receipt layout.');
+  }
   const next = { ...patch };
   if ('storeLogo' in patch) next.storeLogo = validateStoreLogo(patch.storeLogo);
   setSettings(db, next);
@@ -185,4 +256,33 @@ export function idleTimeoutMs(db: Database): number {
   const minutes = getAllSettings(db).idleTimeoutMinutes;
   const safe = Number.isInteger(minutes) ? Math.min(Math.max(minutes, MIN_IDLE_MINUTES), MAX_IDLE_MINUTES) : 15;
   return safe * 60_000;
+}
+
+/** The store's own name must exist before any document can be printed. */
+export function requireStoreName(db: Database): string {
+  const { storeName } = getAllSettings(db);
+  if (!storeName || !storeName.trim()) {
+    throw validation('This store has no name yet. An administrator must set it in Settings before printing.');
+  }
+  return storeName;
+}
+
+/** Enabled payment methods, in the order the till shows them. */
+export function enabledPaymentMethods(db: Database): {
+  method: 'CASH' | 'TRANSFER' | 'POS' | 'CREDIT';
+  label: string;
+  enabled: boolean;
+}[] {
+  const s = getAllSettings(db);
+  return [
+    { method: 'CASH', label: 'Cash', enabled: s.paymentCash },
+    { method: 'TRANSFER', label: 'Transfer', enabled: s.paymentTransfer },
+    { method: 'POS', label: 'Card / POS', enabled: s.paymentPos },
+    { method: 'CREDIT', label: 'Credit', enabled: s.paymentCredit }
+  ];
+}
+
+/** VAT in basis points (750 = 7.50%), or 0 when VAT is switched off. */
+export function vatBasisPoints(settings: SettingsPayload): number {
+  return settings.vatEnabled ? Math.round(settings.vatRate * 100) : 0;
 }

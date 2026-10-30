@@ -9,7 +9,22 @@ export type Role = 'ADMIN' | 'SUPERVISOR' | 'CASHIER';
 
 export type Money = number; // integer kobo (1 naira = 100 kobo)
 
-export type PaymentMethod = 'CASH' | 'TRANSFER' | 'POS' | 'SPLIT';
+export type PaymentMethod = 'CASH' | 'TRANSFER' | 'POS' | 'CREDIT' | 'SPLIT';
+
+/** Retail (counter) or wholesale (invoice) pricing tier. */
+export type PriceTier = 'RETAIL' | 'WHOLESALE';
+
+/** Printable document shapes. Thermal sizes are paper widths in millimetres. */
+export type ReceiptLayout = 'THERMAL_80' | 'THERMAL_58' | 'A4_RECEIPT' | 'A4_INVOICE';
+
+export const RECEIPT_LAYOUTS: { value: ReceiptLayout; label: string }[] = [
+  { value: 'THERMAL_80', label: '80mm thermal receipt' },
+  { value: 'THERMAL_58', label: '58mm thermal receipt' },
+  { value: 'A4_RECEIPT', label: 'A4 receipt' },
+  { value: 'A4_INVOICE', label: 'A4 wholesale invoice' }
+];
+
+export type ApprovalPurpose = 'PRICE_OVERRIDE' | 'DISCOUNT' | 'VOID';
 
 export type DocType = 'RECEIPT' | 'INVOICE';
 
@@ -216,6 +231,28 @@ export interface SettingsPayload extends StoreProfile {
   licenseExpiryWarningDays: number;
   /** Auto sign-out after this many minutes without activity (1-720). */
   idleTimeoutMinutes: number;
+  /* ---- till behaviour (phase 6) ---- */
+  vatEnabled: boolean;
+  /** VAT percentage, e.g. 7.5. Stored on each sale in basis points. */
+  vatRate: number;
+  /** Maximum manual discount a non-Admin may give, as a percentage of subtotal. */
+  maxDiscountPercent: number;
+  paymentCash: boolean;
+  paymentTransfer: boolean;
+  paymentPos: boolean;
+  paymentCredit: boolean;
+  /** Show the small "Powered by Infoflex …" line under the footer. */
+  poweredByFooter: boolean;
+  receiptLayout: ReceiptLayout;
+  /** Offer the customer-facing totals window on the till. */
+  customerDisplay: boolean;
+  /** Supermarket: require an open cashier shift before selling. */
+  requireShift: boolean;
+  /** Loyalty: points earned per ₦100 spent. */
+  loyaltyPointsPer100: number;
+  /** Loyalty: value of one point in kobo when redeeming. */
+  loyaltyPointValue: Money;
+  loyaltyRedeemEnabled: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -433,28 +470,46 @@ export interface CartLineInput {
   qty: number;
   /** Optional negotiated unit price (kobo). Requires override permission when it differs. */
   unitPrice?: Money;
+  /** Manual line discount in kobo (counts towards the discount cap). */
+  discount?: Money;
   batchId?: number;
+}
+
+export interface SalePaymentInput {
+  method: PaymentMethod;
+  amount: Money;
+  reference?: string | null;
 }
 
 export interface SaleInput {
   docType: DocType;
+  /** RETAIL keeps list prices, WHOLESALE uses the wholesale tier. */
+  tier?: PriceTier;
   lines: CartLineInput[];
   customerName?: string;
   customerPhone?: string;
   customerAddress?: string;
   prescriptionRef?: string;
+  /** Sale-level manual discount in kobo (counts towards the discount cap). */
   discount?: Money;
   paymentMethod: PaymentMethod;
+  /** What the customer actually handed over (may exceed the total: change due). */
   amountPaid: Money;
   note?: string;
   /** Supervisor/admin who approved a price override on this sale. */
   priceOverrideApprovedBy?: number;
   /** Split payment: one entry per method. Amounts are what the customer tendered. */
-  payments?: { method: PaymentMethod; amount: Money; reference?: string | null }[];
+  payments?: SalePaymentInput[];
   /* ---- shared directory / supermarket module ---- */
   customerId?: number | null;
   loyaltyMemberId?: number | null;
   shiftId?: number | null;
+  /** Points the customer is spending on this sale. */
+  loyaltyRedeemed?: number;
+  /** Short-lived approval token from pos.approve() for overrides/discounts. */
+  approvalToken?: string;
+  /** Recall a held basket: the hold is removed once the sale completes. */
+  holdId?: number | null;
 }
 
 export interface SaleItem {
@@ -473,6 +528,9 @@ export interface SaleItem {
   rxRequired: boolean;
   /** Weighed line: qty is grams and the unit price is per kilogram. */
   isWeighed: boolean;
+  /** Manual discount given on this line, in kobo. */
+  lineDiscount: Money;
+  promotionName: string | null;
 }
 
 export interface Sale {
@@ -490,6 +548,17 @@ export interface Sale {
   amountPaid: Money;
   changeDue: Money;
   paymentMethod: PaymentMethod;
+  tier: PriceTier;
+  /** Credit left on the invoice after the payments recorded with it. */
+  balanceDue: Money;
+  promoDiscount: Money;
+  itemDiscount: Money;
+  loyaltyPoints: number;
+  loyaltyRedeemed: number;
+  loyaltyValue: Money;
+  /** VAT percentage applied to this document (0 when disabled). */
+  vatRate: number;
+  printCount: number;
   status: SaleStatus;
   voidReason: string | null;
   voidRequestedBy: number | null;
@@ -685,3 +754,133 @@ export interface ReceiptDocument {
 }
 
 export const CURRENCY_SYMBOL = '₦';
+
+/* ------------------------------------------------------------------ */
+/* Point of sale (phase 6)                                             */
+/* ------------------------------------------------------------------ */
+
+/** One cart line as the server prices it, before anything is written. */
+export interface QuoteLine {
+  productId: number;
+  sku: string;
+  name: string;
+  qty: number;
+  unitPrice: Money;
+  listPrice: Money;
+  isWeighed: boolean;
+  /** qty × unit price (weighed: grams × kobo/kg ÷ 1000). */
+  gross: Money;
+  lineDiscount: Money;
+  promoDiscount: Money;
+  promotionId: number | null;
+  promotionName: string | null;
+  /** gross − lineDiscount − promoDiscount. */
+  net: Money;
+  rxRequired: boolean;
+  priceOverridden: boolean;
+}
+
+export interface SaleQuote {
+  tier: PriceTier;
+  lines: QuoteLine[];
+  subtotal: Money;
+  itemDiscount: Money;
+  promoDiscount: Money;
+  manualDiscount: Money;
+  /** itemDiscount + promoDiscount + manualDiscount. */
+  totalDiscount: Money;
+  /** Percentage of the subtotal that manual discounts represent. */
+  manualDiscountPercent: number;
+  vatRate: number;
+  tax: Money;
+  loyaltyValue: Money;
+  /** Points the buyer is spending on this sale. */
+  loyaltyRedeemed: number;
+  total: Money;
+  /** Points the buyer will earn (supermarket loyalty). */
+  loyaltyEarned: number;
+  /** True when the actor cannot complete this basket without an approval. */
+  requiresApproval: boolean;
+  /** Reason approval is needed, for the message shown at the till. */
+  approvalReason: string | null;
+  /** A line price differs from the shelf price and the actor cannot override it. */
+  needsPriceApproval: boolean;
+  /** Discounts exceed the administrator's cap and the actor is not an administrator. */
+  exceedsDiscountCap: boolean;
+  /** Total discount as a percentage of the subtotal. */
+  discountPercent: number;
+  blocked?: string | null;
+}
+
+export interface HeldSale {
+  id: number;
+  holdNo: string;
+  label: string | null;
+  linesCount: number;
+  total: Money;
+  customerName: string | null;
+  username: string;
+  createdAt: string;
+}
+
+export interface PosConfig {
+  paymentMethods: { method: PaymentMethod; label: string; enabled: boolean }[];
+  vatEnabled: boolean;
+  vatRate: number;
+  maxDiscountPercent: number;
+  canDiscountFreely: boolean;
+  canOverridePrice: boolean;
+  loyaltyEnabled: boolean;
+  loyaltyPointsPer100: number;
+  loyaltyPointValue: Money;
+  loyaltyRedeemEnabled: boolean;
+  requireShift: boolean;
+  shift: { id: number; openedAt: string; openingFloat: Money; expectedCash: Money } | null;
+  customerDisplay: boolean;
+  receiptLayout: ReceiptLayout;
+  poweredByFooter: boolean;
+  wholesaleEnabled: boolean;
+}
+
+export interface ApprovalGrant {
+  token: string;
+  username: string;
+  purpose: ApprovalPurpose;
+  expiresAt: string;
+}
+
+export interface CustomerBalance {
+  customerId: number;
+  name: string;
+  phone: string | null;
+  creditLimit: Money;
+  outstanding: Money;
+  invoices: number;
+}
+
+export interface CreditPaymentInput {
+  saleId: number;
+  amount: Money;
+  method: PaymentMethod;
+  reference?: string | null;
+}
+
+/** What the customer-facing display shows. */
+export interface DisplayState {
+  storeName: string;
+  lines: { name: string; qty: number; amount: Money; isWeighed: boolean }[];
+  subtotal: Money;
+  discount: Money;
+  tax: Money;
+  total: Money;
+  paid: Money;
+  change: Money;
+  updatedAt: string;
+}
+
+export interface SaleDocumentPayload {
+  html: string;
+  sale: Sale;
+  layout: ReceiptLayout;
+  duplicate: boolean;
+}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useApi, useApp } from '../state';
-import { formatMoney } from '../../../shared/money';
+import { formatMoney, moneyToInput, parseMoneyInput } from '../../../shared/money';
+import type { CreditPaymentInput } from '../../../shared/types';
 import {
   Alert,
   Badge,
@@ -9,8 +10,10 @@ import {
   DataTable,
   Field,
   Input,
+  Modal,
   PageHead,
-  SearchBox
+  SearchBox,
+  Select
 } from '../components/ui';
 
 interface CustomerRow {
@@ -21,6 +24,23 @@ interface CustomerRow {
   address: string | null;
   credit_limit: number;
   active: number;
+}
+
+interface CreditBalanceRow {
+  customerId: number;
+  name: string;
+  phone: string | null;
+  creditLimit: number;
+  outstanding: number;
+  invoices: number;
+}
+
+interface CreditInvoiceRow {
+  id: number;
+  receiptNo: string;
+  createdAt: string;
+  total: number;
+  balanceDue: number;
 }
 
 interface SupplierRow {
@@ -45,7 +65,16 @@ export default function CustomersPage() {
   const [supplier, setSupplier] = useState(emptySupplier);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [balances, setBalances] = useState<CreditBalanceRow[]>([]);
+  const [collectFor, setCollectFor] = useState<CreditBalanceRow | null>(null);
+  const [invoices, setInvoices] = useState<CreditInvoiceRow[]>([]);
+  const [collect, setCollect] = useState<{ saleId: number | null; amount: string; method: 'CASH' | 'TRANSFER' | 'POS' }>({
+    saleId: null,
+    amount: '',
+    method: 'CASH'
+  });
   const admin = can('products.manage');
+  const canCollect = can('sales.credit.collect');
 
   const load = useCallback(async () => {
     const [c, s] = await Promise.all([
@@ -59,6 +88,44 @@ export default function CustomersPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const loadBalances = useCallback(async () => {
+    if (!canCollect) return;
+    const rows = await api<CreditBalanceRow[]>('pos.credits.list', {});
+    if (rows) setBalances(rows.filter((row) => row.outstanding > 0));
+  }, [api, canCollect]);
+
+  useEffect(() => {
+    void loadBalances();
+  }, [loadBalances]);
+
+  async function openCollect(row: CreditBalanceRow) {
+    setCollectFor(row);
+    setCollect({ saleId: null, amount: '', method: 'CASH' });
+    const list = await api<CreditInvoiceRow[]>('pos.credits.invoices', { customerId: row.customerId });
+    setInvoices(list ?? []);
+  }
+
+  async function submitCollect() {
+    if (!collect.saleId || !collectFor) return;
+    const amount = parseMoneyInput(collect.amount);
+    if (amount <= 0) return setError('Enter the amount received.');
+    setBusy(true);
+    setError(null);
+    try {
+      const payload: CreditPaymentInput = { saleId: collect.saleId, amount, method: collect.method };
+      await api('pos.credits.pay', { ...payload });
+      notify(`${formatMoney(amount)} received from ${collectFor.name}.`, 'success');
+      const list = await api<CreditInvoiceRow[]>('pos.credits.invoices', { customerId: collectFor.customerId });
+      setInvoices(list ?? []);
+      setCollect({ saleId: null, amount: '', method: 'CASH' });
+      await loadBalances();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not record the payment.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function saveCustomer(event: React.FormEvent) {
     event.preventDefault();
@@ -181,6 +248,41 @@ export default function CustomersPage() {
           )}
         </Card>
 
+        {canCollect ? (
+          <Card title={`Credit balances (${balances.length})`}>
+            {balances.length === 0 ? (
+              <div className="empty">No customer owes anything.</div>
+            ) : (
+              <DataTable<CreditBalanceRow>
+                rows={balances}
+                empty="No customer owes anything."
+                columns={[
+                  { key: 'name', label: 'Customer' },
+                  { key: 'phone', label: 'Phone', render: (row) => row.phone ?? '—' },
+                  { key: 'invoices', label: 'Open invoices', align: 'right' },
+                  {
+                    key: 'creditLimit',
+                    label: 'Credit limit',
+                    align: 'right',
+                    render: (row) => formatMoney(row.creditLimit)
+                  },
+                  {
+                    key: 'outstanding',
+                    label: 'Owing',
+                    align: 'right',
+                    render: (row) => <strong>{formatMoney(row.outstanding)}</strong>
+                  }
+                ]}
+                onRowClick={(row) => void openCollect(row)}
+              />
+            )}
+            <p className="tiny muted" style={{ marginTop: 10 }}>
+              Click a customer to receive a payment against their oldest open invoice. Credit is only offered to
+              customers with a limit set above zero.
+            </p>
+          </Card>
+        ) : null}
+
         <Card title={`Suppliers (${suppliers.length})`}>
           <DataTable<SupplierRow>
             rows={suppliers}
@@ -233,6 +335,88 @@ export default function CustomersPage() {
           )}
         </Card>
       </div>
+      {collectFor ? (
+        <Modal
+          title={`Receive payment · ${collectFor.name}`}
+          size="wide"
+          onClose={() => setCollectFor(null)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setCollectFor(null)}>
+                Close
+              </Button>
+              <Button onClick={() => void submitCollect()} disabled={busy || !collect.saleId}>
+                {busy ? 'Saving…' : 'Record payment'}
+              </Button>
+            </>
+          }
+        >
+          {error ? <Alert tone="error">{error}</Alert> : null}
+          {invoices.length === 0 ? (
+            <div className="empty">This customer has no open invoices.</div>
+          ) : (
+            <DataTable<CreditInvoiceRow>
+              rows={invoices}
+              empty="No open invoices."
+              columns={[
+                { key: 'receiptNo', label: 'Invoice' },
+                {
+                  key: 'createdAt',
+                  label: 'Date',
+                  render: (row) => new Date(row.createdAt).toLocaleDateString()
+                },
+                { key: 'total', label: 'Invoice total', align: 'right', render: (row) => formatMoney(row.total) },
+                {
+                  key: 'balanceDue',
+                  label: 'Balance',
+                  align: 'right',
+                  render: (row) => <strong>{formatMoney(row.balanceDue)}</strong>
+                },
+                {
+                  key: 'pick',
+                  label: '',
+                  align: 'right',
+                  render: (row) => (
+                    <Button
+                      size="sm"
+                      variant={collect.saleId === row.id ? 'gold' : 'ghost'}
+                      onClick={() => {
+                        setCollect({
+                          saleId: row.id,
+                          amount: moneyToInput(row.balanceDue),
+                          method: collect.method
+                        });
+                      }}
+                    >
+                      {collect.saleId === row.id ? 'Selected' : 'Select'}
+                    </Button>
+                  )
+                }
+              ]}
+            />
+          )}
+          <div className="form-grid two" style={{ marginTop: 14 }}>
+            <Field label="Amount received (₦)">
+              <Input
+                value={collect.amount}
+                onChange={(e) => setCollect({ ...collect, amount: e.target.value })}
+                inputMode="decimal"
+                style={{ textAlign: 'right' }}
+              />
+            </Field>
+            <Field label="Method">
+              <Select
+                value={collect.method}
+                onChange={(e) => setCollect({ ...collect, method: e.target.value as 'CASH' | 'TRANSFER' | 'POS' })}
+              >
+                <option value="CASH">Cash</option>
+                <option value="TRANSFER">Transfer</option>
+                <option value="POS">Card / POS</option>
+              </Select>
+            </Field>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }

@@ -348,6 +348,75 @@ async function main() {
     await api('settings.update', { storeName: 'Grace Pharmacy' });
   });
 
+  await check('till configuration reports payment methods and VAT', async () => {
+    const config = await api<{ paymentMethods: { method: string; enabled: boolean }[]; maxDiscountPercent: number }>(
+      'pos.config'
+    );
+    assert(config.paymentMethods.some((m) => m.method === 'CASH' && m.enabled), 'cash missing');
+    assert(config.paymentMethods.some((m) => m.method === 'CREDIT' && !m.enabled), 'credit should start disabled');
+    assert(config.maxDiscountPercent === 10, `discount cap ${config.maxDiscountPercent}`);
+  });
+
+  await check('quote adds VAT and the sale charges the same total', async () => {
+    await api('settings.update', { vatEnabled: true, vatRate: 7.5 });
+    try {
+      const quote = await api<{ subtotal: number; tax: number; total: number }>('pos.quote', {
+        lines: [{ productId: 1, qty: 2 }]
+      });
+      assert(quote.subtotal === 160_000, `subtotal ${quote.subtotal}`);
+      assert(quote.tax === 12_000, `vat ${quote.tax}`);
+      assert(quote.total === 172_000, `total ${quote.total}`);
+      const sale = await api<{ total: number; tax: number; vatRate: number }>('sales.create', {
+        docType: 'RECEIPT',
+        lines: [{ productId: 1, qty: 2 }],
+        paymentMethod: 'CASH',
+        amountPaid: 172_000
+      });
+      assert(sale.total === quote.total, 'sale total differs from the quote');
+      assert(sale.tax === quote.tax && sale.vatRate === 750, 'VAT not stored');
+    } finally {
+      await api('settings.update', { vatEnabled: false });
+    }
+  });
+
+  await check('split payment records every method', async () => {
+    const sale = await api<{ total: number; payments: { method: string }[] }>('sales.create', {
+      docType: 'RECEIPT',
+      lines: [{ productId: 1, qty: 1 }],
+      paymentMethod: 'SPLIT',
+      amountPaid: 100_000,
+      payments: [
+        { method: 'CASH', amount: 60_000 },
+        { method: 'TRANSFER', amount: 40_000 }
+      ]
+    });
+    assert(sale.payments.length === 2, 'two payment rows expected');
+    assert(sale.total === 80_000, `total ${sale.total}`);
+  });
+
+  await check('print log marks the reprint DUPLICATE', async () => {
+    const first = await api<{ duplicate: boolean; html: string }>('pos.print', { id: saleId, layout: 'THERMAL_80' });
+    assert(first.duplicate === false, 'first print should be the original');
+    assert(first.html.includes('Grace Pharmacy'), 'store name missing');
+    const second = await api<{ duplicate: boolean; html: string }>('pos.print', { id: saleId });
+    assert(second.duplicate === true && /duplicate/i.test(second.html), 'reprint not marked duplicate');
+    const log = await api<{ duplicate: number }[]>('pos.prints', { saleId });
+    assert(log.length === 2 && log[0].duplicate === 1, 'print trail wrong');
+  });
+
+  await check('a basket can be held and recalled', async () => {
+    const held = await api<{ id: number; holdNo: string }>('pos.holds.save', {
+      label: 'Smoke hold',
+      total: 80_000,
+      linesCount: 1,
+      payload: { lines: [{ productId: 1, qty: 1 }] }
+    });
+    assert(/^HLD-\d{6}$/.test(held.holdNo), `hold number ${held.holdNo}`);
+    const list = await api<{ id: number }[]>('pos.holds.list');
+    assert(list.some((h) => h.id === held.id), 'held basket not listed');
+    await api('pos.holds.cancel', { id: held.id });
+  });
+
   await check('bank transfer sale records payment method', async () => {
     const sale = await api<{ paymentMethod: string }>('sales.create', {
       docType: 'RECEIPT',

@@ -555,3 +555,108 @@ here is DRM-grade:
 - Import matching by exact name can merge two products that share a name across
   different SKUs if the sheet leaves SKU and barcode blank — the dry run preview
   shows this before anything is written.
+
+## 34. Phase 6: the till, credit and printed documents
+
+- **Two price tiers, one switch.** `RETAIL` charges `products.price`; `WHOLESALE` charges
+  `products.wholesale_price` **only when the line reaches `wholesale_min_qty`**, otherwise the
+  retail price. An `INVOICE` implies the wholesale tier unless the caller names a tier. The
+  decision is made on the server (`listPriceFor()`), so a crafted renderer cannot buy at trade
+  prices by claiming a tier it is not entitled to: the invoice path still needs
+  `wholesale.sell` and the `wholesale` feature flag.
+- **VAT is added on top of the discounted subtotal.** Shelf prices are treated as
+  VAT-exclusive when VAT is enabled (Settings → Till & receipts). `sales.vat_rate` stores the
+  rate in basis points (750 = 7.50%) so an old document can be reprinted with the rate it was
+  issued at. VAT is off by default; nothing changes for shops that do not charge it.
+- **The discount cap covers only deliberate discounts.** Item-level and sale-level discounts
+  count towards `settings.max_discount_percent`; automatic promotions do not, because they are
+  the store's own pricing rather than a cashier's discretion. Anyone without
+  `settings.manage` (i.e. cashiers and supervisors) is bound by the cap on the server, and any
+  attempt to go over returns `APPROVAL_REQUIRED` with the cap in the message. Only an
+  administrator can approve an over-cap discount.
+- **Approvals are PIN tokens, never passwords on the wire into the sale.** `pos.approve`
+  verifies the approver's own username and password with the normal scrypt verifier, checks the
+  role holds the right permission (`prices.override` for a price override, `settings.manage`
+  for a discount above the cap, `sales.void.approve` for a void) and returns a random,
+  single-use, five-minute token held in the main process's memory. The sale passes the token
+  back; `consumeApproval()` marks it used. A failed attempt is audited as
+  `pos.approval.denied`, a successful one as `pos.approval` (self-approval by an administrator
+  is allowed but logged at `WARN`). Restarting the app invalidates every outstanding token.
+- **`amount_paid` means money actually collected.** A credit line is stored as a `payments` row
+  with `method = 'CREDIT'`; `sales.balance_due` caches what is still owed, and `change_due` is
+  only ever computed from cash, so a credit sale can never hand back change. Credit needs an
+  administrator to switch `payment_credit` on, a customer on file, a credit limit above zero and
+  enough headroom for the new balance. Late payments are new `payments` rows (`pos.credits.pay`,
+  permission `sales.credit.collect`), counted towards the drawer of the shift that took them;
+  the original invoice keeps its total, lines and number.
+- **`payments.shift_id` was added in migration v6** so shift reconciliation sums money by the
+  drawer it entered, not just by the sale it belongs to. Credit collected the next morning is
+  attributed to the morning shift.
+- **`settings.require_shift` is off by default.** When an administrator switches it on, a
+  supermarket sale without an open shift for that cashier fails with `SHIFT_REQUIRED` and a
+  message pointing at the drawer float. Defaulting it off keeps the pharmacy flow (no shifts)
+  and upgrade paths working exactly as before.
+- **Promotions: the best single offer per line.** A line takes the largest of the active,
+  in-window promotions that name the product, its category or its department and whose
+  `min_qty` is met. `PERCENT` and `AMOUNT` apply to the line value; `BOGO` treats `min_qty` as
+  "buy this many, one free per group" (so `min_qty = 2` is the classic buy-one-get-one);
+  `MULTIBUY` treats `value` as the bundle price for `min_qty` units. Unit-count promotions are
+  skipped for weighed lines, where a "unit" would be a gram.
+- **Loyalty is earned on what the customer actually pays.** Points are
+  `floor(total ÷ ₦100) × loyalty_points_per_100` on the total after any redemption, and both
+  the earn and the spend write `loyalty_transactions` rows inside the sale transaction. Points
+  cannot be redeemed below zero or beyond the bill, and redemption is switchable
+  (`loyalty_redeem_enabled`). Loyalty only runs on supermarket licences.
+- **Line money keeps gross and discount side by side.** `sale_items.line_total` stays the gross
+  line value and `line_discount` holds the manual + promotional reduction, so returns can still
+  credit the right proportion of a discounted line. `sales.subtotal` is the sum of gross,
+  `sales.discount` the sum of every reduction (item + promotion + sale-level) for reporting.
+- **Held baskets are drafts, not sales.** `held_sales.payload` is the cart JSON; holding writes
+  no stock or money movement, recall reads it back and deletes the hold, and a hold is only
+  visible to the cashier who made it (or anyone with `sales.view.all`). Cancelling a hold is
+  audited as `pos.hold.cancel`.
+- **Printing is logged, and only the first print is an original.** `pos.print` renders the
+  document, writes a `document_prints` row, increments `sales.print_count` and sets
+  `last_printed_at`; every print after the first is stamped **DUPLICATE** in the header and
+  audited as `sale.reprint` (`WARN`). `sales.document` still exists for on-screen previews and
+  does not touch the trail, so looking at a sale is not a print.
+- **Four layouts.** `THERMAL_80` and `THERMAL_58` print monospaced, dashed-rule receipts sized
+  with `@page size: 80mm/58mm auto` and force the store logo to greyscale; `A4_RECEIPT` is the
+  classic A4 page and `A4_INVOICE` adds a bill-to block, a discount column and signature lines.
+  All four are HTML with inline CSS and print through the same preview the reports use.
+- **The store name is the snapshot, not today's settings.** Receipts and invoices headline
+  `sales.store_name` (with the snapshotted address and phone), so a renamed shop leaves old
+  documents untouched. Email, licence number, VAT number and logo are not snapshotted and come
+  from current settings — they line up with the address the customer is told to use today.
+  If the store name is missing from settings *or* from the snapshot, printing fails with
+  `PRINT_BLOCKED` and a message pointing the administrator at Settings → Store profile.
+- **The Infoflex tagline moved out of the header.** It used to sit under the store name; now the
+  store name is the only thing at the top, and "Powered by Infoflex Pharm/Mart" (admin toggle,
+  default on) is a small line under the footer. The brand can never be mistaken for the shop.
+- **The customer display is an in-app full-screen panel.** The app is a single desktop window,
+  so an always-on-top second window would need multi-window plumbing the licence model does not
+  cover. The panel shows the same server-priced basket, discounts, VAT, total and change, and is
+  switched on per store (`customer_display`).
+- **Printing is allowed to the cashier who made the sale.** `pos.print` carries `pos.sell` and
+  then checks ownership in the handler (`sales.view.all` sees everything), because a cashier
+  must be able to hand a customer their receipt without extra rights.
+- **Keyboard shortcuts are global to the till page.** F2 focuses the scan/search box, F9
+  completes the sale (the same path as the button, including approvals), F10 reprints the open
+  receipt as a DUPLICATE.
+
+## 35. Known limitations after phase 6
+
+- The thermal layouts are HTML `@page` rules: a real roll printer needs the operator to pick the
+  matching paper size in the Electron print dialog once. There is no ESC/POS or cash-drawer
+  kick-out command; the drawer log is financial, not electrical.
+- Cash-drawer events (`NO_SALE`, `PAID_IN`, `PAID_OUT`) are recorded but there is no hardware
+  integration to pop the till.
+- The customer display is a full-screen panel on the same screen; a second physical monitor
+  would need a second window.
+- Approval tokens live in main-process memory, so a restart (or a second till on the same
+  machine) cancels them. There is no PIN pad — the approver types their normal password.
+- Refunds of a credit invoice reduce stock and issue a credit note but do not automatically
+  reduce `balance_due`; collections are recorded explicitly through `pos.credits.pay`.
+- A promotion applies to a line, and two scans of the same product in one basket rely on the
+  till merging them (it does); a hand-built cart with the same product on two lines is priced
+  as two lines, each with its own promotion test.

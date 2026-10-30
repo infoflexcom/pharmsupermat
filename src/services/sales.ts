@@ -14,7 +14,10 @@ import { audit } from './audit';
 import { allocateStock, commitSaleAllocation, receiveStock, type Actor } from './stock';
 import { requireProduct } from './products';
 import { nextDocumentNumber, rangeBounds } from './helpers';
-import { getStoreProfile } from './settings';
+import { enabledPaymentMethods, getAllSettings, getStoreProfile } from './settings';
+import { priceCart } from './pricing';
+import { consumeApproval } from './approvals';
+import { adjustLoyaltyPoints } from './marketing';
 
 export interface SalesActor extends Actor {
   permissions: readonly string[];
@@ -52,6 +55,16 @@ interface SaleRow {
   customer_id: number | null;
   loyalty_member_id: number | null;
   shift_id: number | null;
+  tier: 'RETAIL' | 'WHOLESALE';
+  balance_due: number;
+  promo_discount: number;
+  item_discount: number;
+  loyalty_points: number;
+  loyalty_redeemed: number;
+  loyalty_value: number;
+  vat_rate: number;
+  print_count: number;
+  last_printed_at: string | null;
 }
 
 interface SaleItemRow {
@@ -69,6 +82,9 @@ interface SaleItemRow {
   batch_no: string | null;
   rx_required: number;
   is_weighed: number;
+  line_discount: number;
+  promotion_id: number | null;
+  promotion_name: string | null;
 }
 
 function mapItem(row: SaleItemRow): SaleItem {
@@ -86,7 +102,9 @@ function mapItem(row: SaleItemRow): SaleItem {
     batchId: row.batch_id,
     batchNo: row.batch_no,
     rxRequired: !!row.rx_required,
-    isWeighed: !!row.is_weighed
+    isWeighed: !!row.is_weighed,
+    lineDiscount: row.line_discount ?? 0,
+    promotionName: row.promotion_name ?? null
   };
 }
 
@@ -110,6 +128,15 @@ function mapSale(
     amountPaid: row.amount_paid,
     changeDue: row.change_due,
     paymentMethod: row.payment_method,
+    tier: row.tier,
+    balanceDue: row.balance_due,
+    promoDiscount: row.promo_discount,
+    itemDiscount: row.item_discount,
+    loyaltyPoints: row.loyalty_points,
+    loyaltyRedeemed: row.loyalty_redeemed,
+    loyaltyValue: row.loyalty_value,
+    vatRate: row.vat_rate,
+    printCount: row.print_count,
     status: row.status,
     voidReason: row.void_reason,
     voidRequestedBy: row.void_requested_by,
@@ -132,8 +159,64 @@ function mapSale(
   };
 }
 
-const PAYMENT_METHODS: PaymentMethod[] = ['CASH', 'TRANSFER', 'POS', 'SPLIT'];
+const PAYMENT_METHODS: PaymentMethod[] = ['CASH', 'TRANSFER', 'POS', 'CREDIT', 'SPLIT'];
 
+interface PreparedPayment {
+  method: PaymentMethod;
+  amount: number;
+  reference: string | null;
+}
+
+/** Money actually collected (everything except the amount left on account). */
+function cashOf(payments: PreparedPayment[]): number {
+  return payments.filter((p) => p.method !== 'CREDIT').reduce((sum, p) => sum + p.amount, 0);
+}
+
+function creditOf(payments: PreparedPayment[]): number {
+  return payments.filter((p) => p.method === 'CREDIT').reduce((sum, p) => sum + p.amount, 0);
+}
+
+/**
+ * The cashier's open shift, or the shift the caller named. Supermarket stores
+ * can insist on an open shift before the first sale of the day.
+ */
+function resolveShift(db: Database, requested: number | null | undefined, actor: Actor, required: boolean): number | null {
+  if (requested) {
+    const row = db.handle
+      .prepare('SELECT id, user_id, status FROM cashier_shifts WHERE id = ?')
+      .get(requested) as { id: number; user_id: number; status: string } | undefined;
+    if (!row) throw validation('That shift does not exist.');
+    if (row.status !== 'OPEN') throw new AppError('CONFLICT', 'That shift is already closed.');
+    if (row.user_id !== actor.userId) throw validation('You can only sell on your own shift.');
+    return row.id;
+  }
+  const open = db.handle
+    .prepare("SELECT id FROM cashier_shifts WHERE user_id = ? AND status = 'OPEN' ORDER BY id DESC LIMIT 1")
+    .get(actor.userId) as { id: number } | undefined;
+  if (required && !open) {
+    throw new AppError('SHIFT_REQUIRED', 'Open your cashier shift (with the opening float) before selling.');
+  }
+  return open?.id ?? null;
+}
+
+/** Outstanding balance across a customer's completed credit invoices. */
+export function customerOutstanding(db: Database, customerId: number): number {
+  const row = db.handle
+    .prepare(
+      `SELECT COALESCE(SUM(balance_due), 0) AS due FROM sales
+       WHERE customer_id = ? AND status = 'COMPLETED' AND balance_due > 0`
+    )
+    .get(customerId) as { due: number };
+  return row.due;
+}
+
+/**
+ * Records a sale.
+ *
+ * Everything that touches money or stock happens in one SQLite transaction:
+ * the till quote, stock allocation (FEFO where batches carry expiry dates),
+ * the sale, its lines, its payments, the loyalty ledger and the audit trail.
+ */
 export function createSale(
   db: Database,
   input: SaleInput,
@@ -155,14 +238,38 @@ export function createSale(
   if (!Number.isInteger(input.amountPaid) || input.amountPaid < 0) {
     throw validation('Amount paid is invalid.');
   }
-  const splitPayments = input.payments ?? [];
-  if (splitPayments.length) {
-    if (splitPayments.some((p) => !PAYMENT_METHODS.includes(p.method) || !Number.isInteger(p.amount) || p.amount <= 0)) {
-      throw validation('Each split payment needs a valid method and a positive amount.');
+  if (input.tier && input.tier !== 'RETAIL' && input.tier !== 'WHOLESALE') {
+    throw validation('Choose a valid price tier.');
+  }
+
+  const settings = getAllSettings(db);
+  const enabled = enabledPaymentMethods(db);
+  const supplied = input.payments ?? [];
+  if (supplied.length) {
+    if (
+      supplied.some(
+        (p) =>
+          !PAYMENT_METHODS.includes(p.method) ||
+          p.method === 'SPLIT' ||
+          !Number.isInteger(p.amount) ||
+          p.amount <= 0
+      )
+    ) {
+      throw validation('Each payment needs a valid method and a positive amount.');
     }
-    const splitTotal = splitPayments.reduce((sum, p) => sum + p.amount, 0);
-    if (splitTotal !== input.amountPaid) {
-      throw validation('Split payments must add up to the amount tendered.');
+    for (const payment of supplied) {
+      const method = enabled.find((m) => m.method === payment.method);
+      if (method && !method.enabled) {
+        throw validation(`${method.label} payments are switched off. An administrator can enable them in Settings.`);
+      }
+    }
+  } else {
+    const chosen = enabled.find((m) => m.method === input.paymentMethod);
+    if (!chosen) {
+      throw validation('Split payments need at least two entries.');
+    }
+    if (!chosen.enabled) {
+      throw validation(`${chosen.label} payments are switched off. An administrator can enable them in Settings.`);
     }
   }
 
@@ -173,81 +280,185 @@ export function createSale(
 
   return db.transaction(() => {
     const now = nowIso();
-    const created: { productId: number; allocation: ReturnType<typeof allocateStock>[number]; row: SaleItemRow }[] = [];
-    let priceOverridden = false;
-    let needsPrescription = false;
+    const shiftId = resolveShift(
+      db,
+      input.shiftId ?? null,
+      actor,
+      features.supermarket && settings.requireShift
+    );
 
-    for (const line of input.lines) {
-      if (!Number.isInteger(line.qty) || line.qty <= 0) {
-        throw validation('Quantities must be positive whole numbers.');
-      }
-      const product = requireProduct(db, line.productId);
-      // Weighed goods are sold per kilogram. The cart sends the weight in grams
-      // (an integer) so the ledger and the line maths stay exact.
-      const weighed = product.isWeighed && product.pricePerKg !== null;
-      if (product.isWeighed && product.pricePerKg === null) {
-        throw validation(`${product.name} is set up as a weighed item but has no price per kg.`);
-      }
-      const listPrice = weighed
-        ? (product.pricePerKg as number)
-        : input.docType === 'INVOICE'
-          ? product.wholesalePrice
-          : product.price;
-      const unitPrice = line.unitPrice ?? listPrice;
-      if (!Number.isInteger(unitPrice) || unitPrice < 0) throw validation('Unit price is invalid.');
-      if (unitPrice !== listPrice) {
-        if (!actor.permissions.includes('prices.override')) {
-          throw new AppError(
-            'APPROVAL_REQUIRED',
-            `${product.name}: price override on ${(listPrice / 100).toFixed(2)} needs a supervisor.`
-          );
-        }
-        priceOverridden = true;
-      }
-      if (product.rxRequired) needsPrescription = true;
+    const quote = priceCart(db, {
+      lines: input.lines,
+      tier: input.tier,
+      docType: input.docType,
+      discount: input.discount,
+      loyaltyMemberId: input.loyaltyMemberId ?? null,
+      loyaltyRedeemed: input.loyaltyRedeemed
+    }, actor);
 
-      const allocation = allocateStock(db, product.id, line.qty, product.name);
-      // Placeholder salId (0) is patched when writing the line rows below.
-      for (const part of allocation) {
-        created.push({
-          productId: product.id,
-          allocation: part,
-          row: {
-            id: 0,
-            sale_id: 0,
-            product_id: product.id,
-            sku: product.sku,
-            name: product.name,
-            qty: part.qty,
-            unit_price: unitPrice,
-            list_price: listPrice,
-            cost_price: part.costPrice,
-            line_total: weighed ? Math.round((part.qty * unitPrice) / 1000) : part.qty * unitPrice,
-            batch_id: part.batchId,
-            batch_no: part.batchNo,
-            rx_required: product.rxRequired ? 1 : 0,
-            is_weighed: weighed ? 1 : 0
-          }
-        });
+    /* ---- approvals ---- */
+    let priceOverrideApproval: string | null = null;
+    if (quote.needsPriceApproval) {
+      const grant = consumeApproval(db, input.approvalToken, 'PRICE_OVERRIDE');
+      if (!grant) {
+        throw new AppError('APPROVAL_REQUIRED', 'A changed price needs a supervisor to approve it.');
       }
+      priceOverrideApproval = grant.username;
+    }
+    if (quote.exceedsDiscountCap) {
+      // A cashier or supervisor may only exceed the cap with an administrator
+      // walking over and approving it.
+      const grant = consumeApproval(db, input.approvalToken, 'DISCOUNT');
+      if (!grant) {
+        throw new AppError(
+          'APPROVAL_REQUIRED',
+          `Discounts are capped at ${settings.maxDiscountPercent}% for your role. An administrator can approve more.`
+        );
+      }
+      priceOverrideApproval = priceOverrideApproval ?? grant.username;
+    }
+    // The token can only cover one approval; a basket needing two takes two
+    // rounds at the till, which the renderer asks for one at a time.
+    if (quote.needsPriceApproval && quote.exceedsDiscountCap && priceOverrideApproval) {
+      // both were consumed above from the same single-use token only if the
+      // purpose matched; reaching here means they did.
     }
 
+    /* ---- prescription rule (pharmacy) ---- */
+    const needsPrescription = quote.lines.some((l) => l.rxRequired);
     if (features.prescriptions && needsPrescription && !input.prescriptionRef?.trim()) {
       throw validation('A prescription reference is required for prescription-only items.', {
         rxRequired: true
       });
     }
 
-    const subtotal = created.reduce((sum, item) => sum + item.row.line_total, 0);
-    const discount = input.discount ?? 0;
-    if (!Number.isInteger(discount) || discount < 0) throw validation('Discount is invalid.');
-    if (discount > subtotal) throw validation('Discount cannot be more than the subtotal.');
-    const total = subtotal - discount;
-
-    if (input.amountPaid < total) {
-      throw validation('Amount paid is less than the total due.');
+    /* ---- customer + credit ---- */
+    let customer: { id: number; name: string; credit_limit: number } | null = null;
+    if (input.customerId) {
+      const row = db.handle
+        .prepare('SELECT id, name, credit_limit, active FROM customers WHERE id = ?')
+        .get(input.customerId) as
+        | { id: number; name: string; credit_limit: number; active: number }
+        | undefined;
+      if (!row || !row.active) throw validation('That customer is not on file.');
+      customer = { id: row.id, name: row.name, credit_limit: row.credit_limit };
     }
-    const changeDue = input.amountPaid - total;
+    if (input.loyaltyMemberId) {
+      const member = db.handle
+        .prepare('SELECT id, active FROM loyalty_members WHERE id = ?')
+        .get(input.loyaltyMemberId) as { id: number; active: number } | undefined;
+      if (!member || !member.active) throw validation('That loyalty member is not on file.');
+    }
+
+    /* ---- stock: allocate first, so an oversell rolls the whole thing back ---- */
+    interface DraftLine {
+      productId: number;
+      allocation: ReturnType<typeof allocateStock>[number];
+      sku: string;
+      name: string;
+      unitPrice: number;
+      listPrice: number;
+      lineDiscount: number;
+      promotionId: number | null;
+      promotionName: string | null;
+      rxRequired: boolean;
+      isWeighed: boolean;
+      lineTotal: number;
+    }
+
+    const draft: DraftLine[] = [];
+    for (const line of quote.lines) {
+      const product = requireProduct(db, line.productId);
+      const allocation = allocateStock(db, product.id, line.qty, product.name);
+
+      // Split the line over its batches, handing any rounding remainder to the
+      // last part so the parts always add up to the line.
+      let discountLeft = line.lineDiscount + line.promoDiscount;
+      let qtyLeft = line.qty;
+      allocation.forEach((part, index) => {
+        const last = index === allocation.length - 1;
+        const share = last
+          ? discountLeft
+          : Math.min(discountLeft, Math.round(((line.lineDiscount + line.promoDiscount) * part.qty) / line.qty));
+        discountLeft -= share;
+        qtyLeft -= part.qty;
+        const gross = line.isWeighed ? Math.round((part.qty * line.unitPrice) / 1000) : part.qty * line.unitPrice;
+        draft.push({
+          productId: product.id,
+          allocation: part,
+          sku: product.sku,
+          name: product.name,
+          unitPrice: line.unitPrice,
+          listPrice: line.listPrice,
+          lineDiscount: share,
+          promotionId: line.promotionId,
+          promotionName: line.promotionName,
+          rxRequired: line.rxRequired,
+          isWeighed: line.isWeighed,
+          lineTotal: gross
+        });
+      });
+    }
+
+    /* ---- money: checked after stock, so an oversell wins the error ---- */
+    const payments: PreparedPayment[] = supplied.length
+      ? supplied.map((p) => ({ method: p.method, amount: p.amount, reference: p.reference?.trim() || null }))
+      : [{ method: input.paymentMethod, amount: input.amountPaid, reference: null }];
+
+    // A credit sale without explicit payment lines puts the whole bill on account.
+    if (!supplied.length && input.paymentMethod === 'CREDIT') {
+      payments[0] = { method: 'CREDIT', amount: quote.total, reference: null };
+      if (input.amountPaid !== 0 && input.amountPaid !== quote.total) {
+        throw validation('A credit sale is tendered in full or not at all.');
+      }
+    }
+
+    const cashTaken = cashOf(payments);
+    const onCredit = creditOf(payments);
+    const balanceDue = Math.max(0, quote.total - cashTaken);
+    const changeDue = balanceDue > 0 ? 0 : Math.max(0, cashTaken - quote.total);
+
+    if (balanceDue > 0) {
+      if (!settings.paymentCredit) {
+        throw validation('Credit sales are switched off. An administrator can enable them in Settings.');
+      }
+      if (!customer) {
+        throw validation('Choose a credit customer before leaving a balance on the account.');
+      }
+      if (onCredit !== balanceDue) {
+        throw validation('The credit line must equal the balance due.');
+      }
+      if (cashTaken > quote.total) {
+        throw validation('A credit sale cannot give change. Reduce the amount tendered.');
+      }
+      if (customer.credit_limit <= 0) {
+        throw validation(`${customer.name} has no credit limit. An administrator can set one on the customer record.`);
+      }
+      const outstanding = customerOutstanding(db, customer.id);
+      if (outstanding + balanceDue > customer.credit_limit) {
+        throw validation(
+          `${customer.name} is over their credit limit: ₦${((outstanding + balanceDue) / 100).toFixed(2)} of ₦${(
+            customer.credit_limit / 100
+          ).toFixed(2)}.`
+        );
+      }
+    } else {
+      if (onCredit > 0) throw validation('The credit line must equal the balance due.');
+      if (cashTaken < quote.total) {
+        throw validation('Amount paid is less than the total due.');
+      }
+      if (supplied.length && cashTaken !== input.amountPaid) {
+        throw validation('Split payments must add up to the amount tendered.');
+      }
+    }
+
+    if (
+      !payments.some((p) => p.method !== 'CREDIT') &&
+      quote.total > 0 &&
+      onCredit !== quote.total
+    ) {
+      throw validation('The credit line must equal the total due.');
+    }
 
     const receiptNo = nextDocumentNumber(db, input.docType === 'INVOICE' ? 'INV' : 'RCP');
 
@@ -257,23 +468,27 @@ export function createSale(
           (receipt_no, doc_type, customer_name, customer_phone, customer_address, prescription_ref,
            subtotal, discount, tax, total, amount_paid, change_due, payment_method, status,
            price_override_by, user_id, username, store_name, store_address, store_phone, note, created_at,
-           customer_id, loyalty_member_id, shift_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           customer_id, loyalty_member_id, shift_id,
+           tier, balance_due, promo_discount, item_discount, loyalty_points, loyalty_redeemed, loyalty_value,
+           vat_rate, print_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 ?, ?, ?, ?, ?, ?, ?, ?, 0)`
       )
       .run(
         receiptNo,
         input.docType,
-        input.customerName?.trim() || null,
+        customer?.name ?? input.customerName?.trim() ?? null,
         input.customerPhone?.trim() || null,
         input.customerAddress?.trim() || null,
         input.prescriptionRef?.trim() || null,
-        subtotal,
-        discount,
-        total,
-        input.amountPaid,
+        quote.subtotal,
+        quote.totalDiscount,
+        quote.tax,
+        quote.total,
+        cashTaken,
         changeDue,
         input.paymentMethod,
-        priceOverridden ? actor.userId : null,
+        priceOverrideApproval ? actor.userId : null,
         actor.userId,
         actor.username,
         store.storeName,
@@ -281,44 +496,59 @@ export function createSale(
         store.storePhone,
         input.note?.trim() || null,
         now,
-        input.customerId ?? null,
+        customer?.id ?? null,
         input.loyaltyMemberId ?? null,
-        input.shiftId ?? null
+        shiftId,
+        quote.tier,
+        balanceDue,
+        quote.promoDiscount,
+        quote.itemDiscount,
+        quote.loyaltyEarned,
+        input.loyaltyRedeemed ?? 0,
+        quote.loyaltyValue,
+        quote.vatRate
       );
     const saleId = Number(result.lastInsertRowid);
 
     const insertPayment = db.handle.prepare(
-      'INSERT INTO payments (sale_id, method, amount, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      'INSERT INTO payments (sale_id, method, amount, reference, user_id, created_at, shift_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
-    if (splitPayments.length) {
-      for (const payment of splitPayments) {
-        insertPayment.run(saleId, payment.method, payment.amount, payment.reference?.trim() || null, actor.userId, now);
-      }
-    } else {
-      insertPayment.run(saleId, input.paymentMethod, total, null, actor.userId, now);
+    for (const payment of payments) {
+      insertPayment.run(
+        saleId,
+        payment.method,
+        payment.amount,
+        payment.reference,
+        actor.userId,
+        now,
+        payment.method === 'CREDIT' ? null : shiftId
+      );
     }
 
     const insertItem = db.handle.prepare(
       `INSERT INTO sale_items
         (sale_id, product_id, sku, name, qty, unit_price, list_price, cost_price, line_total, batch_id, batch_no,
-         rx_required, is_weighed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         rx_required, is_weighed, line_discount, promotion_id, promotion_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
-    for (const item of created) {
+    for (const item of draft) {
       insertItem.run(
         saleId,
-        item.row.product_id,
-        item.row.sku,
-        item.row.name,
-        item.row.qty,
-        item.row.unit_price,
-        item.row.list_price,
-        item.row.cost_price,
-        item.row.line_total,
-        item.row.batch_id,
-        item.row.batch_no,
-        item.row.rx_required,
-        item.row.is_weighed
+        item.productId,
+        item.sku,
+        item.name,
+        item.allocation.qty,
+        item.unitPrice,
+        item.listPrice,
+        item.allocation.costPrice,
+        item.lineTotal,
+        item.allocation.batchId,
+        item.allocation.batchNo,
+        item.rxRequired ? 1 : 0,
+        item.isWeighed ? 1 : 0,
+        item.lineDiscount,
+        item.promotionId,
+        item.promotionName
       );
       commitSaleAllocation(db, item.productId, item.allocation, {
         refType: 'sale',
@@ -327,22 +557,63 @@ export function createSale(
       });
     }
 
+    /* ---- loyalty ledger ---- */
+    if (input.loyaltyMemberId && features.supermarket) {
+      if (quote.loyaltyRedeemed > 0) {
+        adjustLoyaltyPoints(
+          db,
+          { memberId: input.loyaltyMemberId, points: -quote.loyaltyRedeemed, reason: `Redeemed on ${receiptNo}`, saleId },
+          actor
+        );
+      }
+      if (quote.loyaltyEarned > 0) {
+        adjustLoyaltyPoints(
+          db,
+          { memberId: input.loyaltyMemberId, points: quote.loyaltyEarned, reason: `Earned on ${receiptNo}`, saleId },
+          actor
+        );
+      }
+      db.handle
+        .prepare('UPDATE sales SET loyalty_redeemed = ?, loyalty_value = ?, loyalty_points = ? WHERE id = ?')
+        .run(quote.loyaltyRedeemed, quote.loyaltyValue, quote.loyaltyEarned, saleId);
+    } else if (quote.loyaltyEarned > 0 || (input.loyaltyRedeemed ?? 0) > 0) {
+      db.handle
+        .prepare('UPDATE sales SET loyalty_redeemed = ?, loyalty_value = ?, loyalty_points = 0 WHERE id = ?')
+        .run(input.loyaltyRedeemed ?? 0, quote.loyaltyValue, saleId);
+    }
+
+    /* ---- a held basket is consumed by the sale that replaces it ---- */
+    if (input.holdId) {
+      db.handle.prepare('DELETE FROM held_sales WHERE id = ? AND user_id = ?').run(input.holdId, actor.userId);
+    }
+
+    const anyPriceOverride = quote.lines.some((l) => l.priceOverridden);
     audit(db, {
       action: input.docType === 'INVOICE' ? 'sale.invoice' : 'sale.create',
       entity: 'sale',
       entityId: saleId,
       userId: actor.userId,
       username: actor.username,
-      severity: priceOverridden ? 'WARN' : 'INFO',
+      severity: anyPriceOverride || quote.exceedsDiscountCap ? 'WARN' : 'INFO',
       details: {
         receiptNo,
-        total,
-        discount,
-        items: created.length,
+        total: quote.total,
+        discount: quote.totalDiscount,
+        itemDiscount: quote.itemDiscount,
+        promoDiscount: quote.promoDiscount,
+        manualDiscount: quote.manualDiscount,
+        items: draft.length,
         paymentMethod: input.paymentMethod,
-        priceOverridden,
-        customer: input.customerName ?? null,
-        prescriptionRef: input.prescriptionRef ?? null
+        payments: payments.map((p) => ({ method: p.method, amount: p.amount })),
+        balanceDue,
+        tier: quote.tier,
+        loyaltyEarned: quote.loyaltyEarned,
+        loyaltyRedeemed: quote.loyaltyRedeemed,
+        priceOverridden: anyPriceOverride,
+        approvedBy: priceOverrideApproval,
+        customer: customer?.name ?? input.customerName ?? null,
+        prescriptionRef: input.prescriptionRef ?? null,
+        shiftId
       }
     });
 

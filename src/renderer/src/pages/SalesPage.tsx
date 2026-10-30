@@ -64,6 +64,19 @@ export default function SalesPage() {
     if (doc) setDocument(doc);
   }
 
+  /** Reprints through the print log, so the copy is stamped DUPLICATE. */
+  async function reprint(id: number) {
+    try {
+      const doc = await api<{ html: string; duplicate: boolean }>('pos.print', { id });
+      if (doc) {
+        setDocument(doc);
+        notify(doc.duplicate ? 'Reprinted as DUPLICATE.' : 'Printed.', doc.duplicate ? 'info' : 'success');
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not print this document.', 'error');
+    }
+  }
+
   async function submitVoid() {
     if (!voidTarget) return;
     try {
@@ -215,13 +228,19 @@ export default function SalesPage() {
             </div>
           </div>
 
-          {selected.status === 'COMPLETED' && !selected.voidRequestedAt ? (
-            <div className="row tight" style={{ marginBottom: 12 }}>
+          <div className="row tight" style={{ marginBottom: 12 }}>
+            {selected.status === 'COMPLETED' && !selected.voidRequestedAt ? (
               <Button size="sm" variant="ghost" onClick={() => setVoidTarget(selected)}>
                 Request void
               </Button>
-            </div>
-          ) : null}
+            ) : null}
+            <Button size="sm" variant="ghost" onClick={() => void reprint(selected.id)}>
+              {selected.printCount > 0 ? 'Reprint (DUPLICATE)' : 'Print'}
+            </Button>
+            <span className="tiny muted">
+              {selected.printCount > 0 ? `Printed ${selected.printCount} time${selected.printCount === 1 ? '' : 's'}` : 'Not printed yet'}
+            </span>
+          </div>
 
           {selected.voidRequestedAt && can('sales.void.approve') ? (
             <Alert tone="warn">

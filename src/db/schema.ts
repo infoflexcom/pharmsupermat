@@ -32,6 +32,8 @@ export const TABLES: TableSpec[] = [
   { name: 'license_guard', owner: 'shared', description: 'Per-install random secret used to derive the licence HMAC key.' },
   { name: 'stock_counts', owner: 'supermarket', description: 'Stocktake header: draft/posted counts with variance totals.' },
   { name: 'stock_count_items', owner: 'supermarket', description: 'Counted quantity per product/batch with the system quantity and variance.' },
+  { name: 'held_sales', owner: 'shared', description: 'Parked (held) baskets that can be recalled at the till; payload holds the cart as JSON.' },
+  { name: 'document_prints', owner: 'shared', description: 'Every receipt/invoice print, layout and DUPLICATE reprint trail.' },
   { name: 'categories', owner: 'shared', description: 'Product categories; products.category keeps a denormalised display name.' },
   { name: 'suppliers', owner: 'shared', description: 'Suppliers used by purchases.' },
   { name: 'customers', owner: 'shared', description: 'Customer directory for invoices and credit charges.' },

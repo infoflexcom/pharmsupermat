@@ -50,6 +50,26 @@ import {
   rejectVoid
 } from '../../services/sales';
 import {
+  approveWithPin,
+  type ApprovalInput
+} from '../../services/approvals';
+import { priceCart } from '../../services/pricing';
+import {
+  cancelHeldSale,
+  customerBalanceSummary,
+  displayState,
+  getHeldSale,
+  getPosConfig,
+  holdSale,
+  listCreditBalances,
+  listCreditInvoices,
+  listDocumentPrints,
+  listHeldSales,
+  printSaleDocument,
+  recordCreditPayment,
+  type HoldInput
+} from '../../services/pos';
+import {
   approveReturn,
   createReturn,
   getReturn,
@@ -796,15 +816,124 @@ export const CORE_HANDLERS: Handler[] = [
   },
   {
     channel: 'sales.document',
+    // Prefer pos.print (it records the print and the DUPLICATE rule); this
+    // older channel renders the same document without touching the trail.
     handler: (args) => {
       const session = requireSession(args);
       const sale = getSale(args.ctx.db, payloadOf<{ id: number }>(args).id);
       if (sale.userId !== session.userId && !session.permissions.includes('sales.view.all')) {
         throw new AppError('FORBIDDEN', 'You can only print your own sales.');
       }
-      const html = buildSaleDocument(sale, getStoreProfile(args.ctx.db), args.features.productName);
+      const settings = getAllSettings(args.ctx.db);
+      const html = buildSaleDocument(sale, getStoreProfile(args.ctx.db), args.features.productName, {
+        layout: sale.docType === 'INVOICE' ? 'A4_INVOICE' : settings.receiptLayout,
+        poweredBy: settings.poweredByFooter
+      });
       return { html, sale };
     }
+  },
+
+  /* ---------------- till (phase 6) ---------------- */
+  {
+    channel: 'pos.config',
+    permission: 'pos.sell',
+    handler: (args) => getPosConfig(args.ctx.db, salesActor(requireSession(args)), args.features)
+  },
+  {
+    channel: 'pos.quote',
+    permission: 'pos.sell',
+    handler: (args) => {
+      const session = requireSession(args);
+      const payload = payloadOf<Parameters<typeof priceCart>[1]>(args);
+      return priceCart(args.ctx.db, payload, salesActor(session));
+    }
+  },
+  {
+    channel: 'pos.approve',
+    // Any signed-in user may ask; the approver's own credentials and role
+    // decide whether the approval is granted.
+    handler: (args) => {
+      const session = requireSession(args);
+      return approveWithPin(args.ctx.db, payloadOf<ApprovalInput>(args), session);
+    }
+  },
+  {
+    channel: 'pos.holds.list',
+    permission: 'pos.sell',
+    handler: (args) => listHeldSales(args.ctx.db, salesActor(requireSession(args)))
+  },
+  {
+    channel: 'pos.holds.save',
+    permission: 'pos.sell',
+    handler: (args) => holdSale(args.ctx.db, payloadOf<HoldInput>(args), salesActor(requireSession(args)))
+  },
+  {
+    channel: 'pos.holds.get',
+    permission: 'pos.sell',
+    handler: (args) => {
+      const session = requireSession(args);
+      return getHeldSale(args.ctx.db, payloadOf<{ id: number }>(args).id, salesActor(session));
+    }
+  },
+  {
+    channel: 'pos.holds.cancel',
+    permission: 'pos.sell',
+    handler: (args) => {
+      const session = requireSession(args);
+      return cancelHeldSale(args.ctx.db, payloadOf<{ id: number }>(args).id, salesActor(session));
+    }
+  },
+  {
+    channel: 'pos.print',
+    permission: 'pos.sell',
+    handler: (args) => {
+      const session = requireSession(args);
+      return printSaleDocument(
+        args.ctx.db,
+        payloadOf<{ id: number; layout?: 'THERMAL_80' | 'THERMAL_58' | 'A4_RECEIPT' | 'A4_INVOICE' }>(args),
+        salesActor(session),
+        args.features
+      );
+    }
+  },
+  {
+    channel: 'pos.prints',
+    permission: 'sales.view.all',
+    handler: (args) => listDocumentPrints(args.ctx.db, payloadOf<{ saleId: number }>(args).saleId)
+  },
+  {
+    channel: 'pos.credits.list',
+    permission: 'sales.view.all',
+    handler: (args) => listCreditBalances(args.ctx.db, payloadOf<{ search?: string }>(args)?.search)
+  },
+  {
+    channel: 'pos.credits.customer',
+    // Cashiers need a customer's limit to know whether credit is possible.
+    permission: 'pos.sell',
+    handler: (args) => customerBalanceSummary(args.ctx.db, payloadOf<{ customerId: number }>(args).customerId)
+  },
+  {
+    channel: 'pos.credits.invoices',
+    permission: 'pos.sell',
+    handler: (args) => listCreditInvoices(args.ctx.db, payloadOf<{ customerId: number }>(args).customerId)
+  },
+  {
+    channel: 'pos.credits.pay',
+    permission: 'sales.credit.collect',
+    handler: (args) => {
+      const session = requireSession(args);
+      return recordCreditPayment(
+        args.ctx.db,
+        payloadOf<Parameters<typeof recordCreditPayment>[1]>(args),
+        salesActor(session),
+        args.features
+      );
+    }
+  },
+  {
+    channel: 'pos.display',
+    permission: 'pos.sell',
+    handler: (args) => displayState(args.ctx.db, payloadOf<Parameters<typeof displayState>[1]>(args))
   },
 
   /* ---------------- returns ---------------- */

@@ -59,15 +59,27 @@ export interface SaleRow {
   approved_by: number | null; price_override_by: number | null; user_id: number; username: string;
   store_name: string; store_address: string; store_phone: string; note: string | null; created_at: string;
   customer_id: number | null; loyalty_member_id: number | null; shift_id: number | null;
+  tier: 'RETAIL' | 'WHOLESALE'; balance_due: number; promo_discount: number; item_discount: number;
+  loyalty_points: number; loyalty_redeemed: number; loyalty_value: number; vat_rate: number;
+  print_count: number; last_printed_at: string | null;
 }
 export interface SaleItemRow {
   id: number; sale_id: number; product_id: number; sku: string; name: string; qty: number;
   unit_price: number; list_price: number; cost_price: number; line_total: number;
-  batch_id: number | null; batch_no: string | null; rx_required: number;
+  batch_id: number | null; batch_no: string | null; rx_required: number; is_weighed: number;
+  line_discount: number; promotion_id: number | null; promotion_name: string | null;
 }
 export interface PaymentRow {
   id: number; sale_id: number; method: string; amount: number; reference: string | null;
-  user_id: number | null; created_at: string;
+  user_id: number | null; created_at: string; shift_id: number | null;
+}
+export interface HeldSaleRow {
+  id: number; hold_no: string; label: string | null; payload: string; lines_count: number;
+  total: number; customer_name: string | null; user_id: number; username: string; created_at: string;
+}
+export interface DocumentPrintRow {
+  id: number; sale_id: number; layout: string; duplicate: number;
+  user_id: number | null; username: string | null; created_at: string;
 }
 export interface ReturnRow {
   id: number; credit_note_no: string | null; sale_id: number; customer_name: string | null;
@@ -179,6 +191,8 @@ export interface Repositories {
   drawerEvents: Table<CashDrawerEventRow>;
   productBarcodes: Table<ProductBarcodeRow>;
   productVariants: Table<ProductVariantRow>;
+  heldSales: Table<HeldSaleRow>;
+  documentPrints: Table<DocumentPrintRow>;
 }
 
 /**
@@ -240,17 +254,17 @@ export function createRepositories(db: Database): Repositories {
     }),
     sales: new Table<SaleRow>(db, {
       table: 'sales',
-      columns: P<SaleRow>(['id', 'receipt_no', 'doc_type', 'customer_name', 'customer_phone', 'customer_address', 'prescription_ref', 'subtotal', 'discount', 'tax', 'total', 'amount_paid', 'change_due', 'payment_method', 'status', 'void_reason', 'void_requested_by', 'void_requested_at', 'voided_by', 'voided_at', 'approved_by', 'price_override_by', 'user_id', 'username', 'store_name', 'store_address', 'store_phone', 'note', 'created_at', 'customer_id', 'loyalty_member_id', 'shift_id']),
+      columns: P<SaleRow>(['id', 'receipt_no', 'doc_type', 'customer_name', 'customer_phone', 'customer_address', 'prescription_ref', 'subtotal', 'discount', 'tax', 'total', 'amount_paid', 'change_due', 'payment_method', 'status', 'void_reason', 'void_requested_by', 'void_requested_at', 'voided_by', 'voided_at', 'approved_by', 'price_override_by', 'user_id', 'username', 'store_name', 'store_address', 'store_phone', 'note', 'created_at', 'customer_id', 'loyalty_member_id', 'shift_id', 'tier', 'balance_due', 'promo_discount', 'item_discount', 'loyalty_points', 'loyalty_redeemed', 'loyalty_value', 'vat_rate', 'print_count', 'last_printed_at']),
       orderBy: 'id DESC'
     }),
     saleItems: new Table<SaleItemRow>(db, {
       table: 'sale_items',
-      columns: P<SaleItemRow>(['id', 'sale_id', 'product_id', 'sku', 'name', 'qty', 'unit_price', 'list_price', 'cost_price', 'line_total', 'batch_id', 'batch_no', 'rx_required']),
+      columns: P<SaleItemRow>(['id', 'sale_id', 'product_id', 'sku', 'name', 'qty', 'unit_price', 'list_price', 'cost_price', 'line_total', 'batch_id', 'batch_no', 'rx_required', 'is_weighed', 'line_discount', 'promotion_id', 'promotion_name']),
       orderBy: 'id'
     }),
     payments: new Table<PaymentRow>(db, {
       table: 'payments',
-      columns: P<PaymentRow>(['id', 'sale_id', 'method', 'amount', 'reference', 'user_id', 'created_at']),
+      columns: P<PaymentRow>(['id', 'sale_id', 'method', 'amount', 'reference', 'user_id', 'created_at', 'shift_id']),
       orderBy: 'id'
     }),
     returns: new Table<ReturnRow>(db, {
@@ -324,6 +338,16 @@ export function createRepositories(db: Database): Repositories {
       table: 'product_barcodes',
       columns: P<ProductBarcodeRow>(['id', 'product_id', 'barcode', 'pack_qty', 'is_primary', 'created_at']),
       orderBy: 'product_id, is_primary DESC, id'
+    }),
+    heldSales: new Table<HeldSaleRow>(db, {
+      table: 'held_sales',
+      columns: P<HeldSaleRow>(['id', 'hold_no', 'label', 'payload', 'lines_count', 'total', 'customer_name', 'user_id', 'username', 'created_at']),
+      orderBy: 'created_at DESC'
+    }),
+    documentPrints: new Table<DocumentPrintRow>(db, {
+      table: 'document_prints',
+      columns: P<DocumentPrintRow>(['id', 'sale_id', 'layout', 'duplicate', 'user_id', 'username', 'created_at']),
+      orderBy: 'id DESC'
     }),
     productVariants: new Table<ProductVariantRow>(db, {
       table: 'product_variants',

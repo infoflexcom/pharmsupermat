@@ -330,3 +330,92 @@ Verified on the same headless Linux sandbox.
 - `BASE_URL=... npm run smoke` (fresh data dir) — **36/36 passed**, including import, export/template, pack receipt, reasoned adjustment and cost masking.
 - Live supermarket walk-through on the browser harness (licence SUPERMARKET, seeded demo): weighed sale ₦1,800.00 for 1.500 kg, 2 labels on the sheet with a barcode SVG, stocktake variance −4 posted, PO-000001 received as GRN-000001, CSV export of 6 products.
 - `npm run build` — main 201.94 kB, preload 0.64 kB, renderer 996.54 kB + 30.18 kB CSS.
+
+---
+
+# Phase 6 verification — point of sale and printed documents
+
+## Requirement checklist
+
+### Sales (shared)
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Fast search / barcode scan | ✅ | `products.list` search covers name, SKU, barcode and PLU; scanning a barcode (or pressing Enter on an exact code/PLU) adds the line and clears the box. Covered by `pos-sales` + the POS jsdom mount |
+| Cart with quantity editing | ✅ | `+ / −` buttons, a per-line unit price (only when the role holds `prices.override`) and a per-line discount box |
+| Retail / Wholesale toggle with automatic price tier | ✅ | `seg-toggle` in the till header; `priceCart()` applies `listPriceFor()` on the server, so the tier cannot be forced from the renderer. Test “sells wholesale on credit …” asserts ₦800 trade price vs ₦1,000 shelf price |
+| Per-item and per-sale discounts capped for non-Admins | ✅ | `settings.max_discount_percent` (default 10) is enforced in `priceCart()` for anyone without `settings.manage`; test “caps manual discounts …” shows a cashier blocked at 15% and an administrator allowed |
+| Optional customer | ✅ | Customer search attaches a directory record (and shows their credit limit/owing); the wholesale form also accepts a free-text name, phone and address |
+| Wholesale customers may buy on credit with part payments | ✅ | `payments.method = 'CREDIT'`, `sales.balance_due`, credit limit check, `pos.credits.list`, `pos.credits.invoices`, `pos.credits.pay`; test “sells wholesale on credit, collects part payment …” |
+| Cash / Transfer / POS / Credit, each enabled by the Admin | ✅ | `settings.payment_*` + `enabledPaymentMethods()`; a disabled method is rejected in `createSale` (test “splits payment …” then turns transfers off) and the till only renders enabled buttons |
+| Split payments | ✅ | `payments[]`; each row stored in `payments`, test asserts two rows |
+| Tendered amount and change | ✅ | `amount_paid` = cash collected, `change_due` computed; POS shows the change tile live; credit sales cannot give change (validation) |
+| Hold and recall sales | ✅ | `held_sales` table + `pos.holds.save/list/get/cancel`; test “holds and recalls a basket without touching stock” |
+| Block overselling | ✅ | `allocateStock()` runs inside the transaction before money is written; the smoke check “insufficient stock is refused and rolled back” still passes (and now reports stock before the payment error) |
+| Deduct stock in one DB transaction | ✅ | `createSale` wraps quote → allocation → sale → lines → payments → loyalty → audit in `db.transaction` |
+| Shortcuts F2 / F9 / F10 | ✅ | Global handler on the till page: F2 focus search, F9 complete sale, F10 reprint (DUPLICATE) |
+
+### Pharmacy module
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Deduct stock by FEFO across batches | ✅ | Unchanged `allocateStock()` expiry ordering; the live walk-through took batch `PCM-2401` first and reduced stock 218 → 216 |
+| Warn on prescription-only items | ✅ | POS shows the prescription field and the required hint; `createSale` refuses with `VALIDATION` unless a reference is given (existing test + live check) |
+
+### Supermarket module
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Fast scan-and-go (auto add, repeat scan increments) | ✅ | `handleBarcode()` adds on Enter and a repeat scan increments the existing line |
+| Weighed-item lines | ✅ | Weigh dialog (typed kg + presets), grams stored, `qty × price/kg ÷ 1000` everywhere; `/kg` printed |
+| Promotions: percentage, BOGO, bundle, time-limited | ✅ | `priceCart()` picks the best active in-window promotion per line; tests cover PERCENT, BOGO (2 free on 4) and MULTIBUY (bundle price). Time windows honoured by `starts_at`/`ends_at` |
+| Loyalty earn / redeem | ✅ | Points earned on the total actually paid, redemption capped to the bill, both written to `loyalty_transactions`; test and live run (82 points on ₦4,160.25 at 2 per ₦100) |
+| Voids and price overrides need a Supervisor PIN | ✅ | `pos.approve` verifies the approver’s username/password and role, issues a single-use 5-minute token; test “issues a supervisor approval token …” including a refused self-approval and a refused reuse |
+| Cash drawer open/close events | ✅ | Existing `mart.drawer.log` (NO_SALE / PAID_IN / PAID_OUT) plus the shift OPEN/CLOSE events; credit collections are attributed to the drawer that took the money (`payments.shift_id`) |
+| Cashier shift open/close with opening float | ✅ | `mart.shifts.open/close`; `pos.config` reports the open shift and expected cash, and the till shows a shift banner with an inline “Open shift” control |
+| Customer-facing totals display option | ✅ | `settings.customer_display` + the full-screen customer panel in the till (server-priced lines, discount, VAT, total, change) |
+
+### Printing
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| 80mm thermal, 58mm thermal, A4 receipt, A4 invoice | ✅ | `documents.ts` layouts with `@page size: 80mm/58mm auto` and A4; tests assert the page rules and the live run printed all four |
+| Always with print preview | ✅ | `DocumentView` (iframe preview, print, save) opens on completion and from the sales list |
+| Store name large, bold, centred at the top | ✅ | `storeHeader()` renders the name first; the test asserts the name appears before the first item |
+| Logo above the name, greyscale on thermal | ✅ | `<img class="store-logo">` only when set; thermal CSS applies `filter: grayscale(100%)` |
+| Address / phone(s) / email / licence / VAT only when filled | ✅ | `storeHeader()` filters empty fields; tests assert email + licence number appear once set |
+| Sequential number, date/time, cashier, customer | ✅ | Header meta block on every layout |
+| Items with qty, unit price, line total; discount; subtotal; VAT; total | ✅ | Line table with a discount column on A4 and inline discounts on thermal; totals block shows promotions, item discounts, sale discount, loyalty, VAT at its rate and the total |
+| Payment method(s), amount paid, change, credit balance | ✅ | Payment block lists each row (split shows every method), then paid, change and balance due |
+| Configurable footer + thank-you note | ✅ | `footerText()`; both settings print once each with a sensible default |
+| “Powered by Infoflex Pharm/Mart” footer, Admin on/off, default on | ✅ | `settings.powered_by_footer` (seeded true) drives the small line; the company tagline never appears in the header |
+| Snapshot store name/address/phone; reprint marked DUPLICATE and logged | ✅ | `sales.store_*` snapshots, `document_prints` log, `sales.print_count`; test “prints a thermal receipt …” and the live run |
+| Settings edits affect new documents only | ✅ | Same test: rename → old reprint still shows the old name, the next sale shows the new one |
+| Missing store name blocks printing with a Settings message | ✅ | `pos.print` throws `PRINT_BLOCKED` pointing at Settings → Store profile (test) |
+
+### DONE WHEN
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| A full retail sale completes | ✅ | Live: RCP-000004 with a promotion, 7.5% VAT, split cash/transfer tender and loyalty points |
+| A full wholesale sale completes | ✅ | Live: INV-000002 at trade prices with 60% paid by transfer and 40% on account, then a part payment collected |
+| Stock reduces correctly (FEFO in pharmacy) | ✅ | Pharmacy 218 → 216 on a batch with an expiry date; retail/wholesale stock assertions in tests |
+| Promotions and loyalty compute correctly | ✅ | 10% promotion = ₦430, VAT ₦290.25, total ₦4,160.25, 82 points; BOGO/MULTIBUY unit tests |
+| Printed/previewed receipt and invoice show the store name at the top | ✅ | Live: thermal 80mm, thermal 58mm, A4 receipt and A4 invoice all head with “Sunmart Supermarket” / “Grace Pharmacy” |
+| Changing the store name changes new receipts but not old reprints | ✅ | Test + live run: renamed to “(Phase 6)”, reprint unchanged, next sale carries the new name |
+
+## Verification run
+
+- `npm run typecheck` — clean (node + web, strict, `noUnusedLocals`).
+- `VENDOR_MASTER_PASSWORD=... npm test` — 15 files, **132 tests passed** (10 new phase-6 API tests).
+- `npm run db:verify` — **178 checks, 0 failed** (37 tables, every table written and read back, including `held_sales` and `document_prints`).
+- `VENDOR_MASTER_PASSWORD=... npm run verify:secrets` — PASS (145 files scanned).
+- `BASE_URL=... npm run smoke` (fresh data dir) — **41/41 passed**, including till config, a VAT quote that matches the sale, split payment, the print/DUPLICATE trail and hold/recall.
+- Live walk-through on the browser harness (4180 supermarket / 4183 pharmacy) — **22/22 checks**: promotion+VAT+loyalty retail sale, thermal/A4 printing, hold/recall, credit invoice with part payment, store rename snapshot rule, pharmacy FEFO batch and 58mm receipt.
+- `npm run build` — main 237.91 kB, preload 0.64 kB, renderer 1,045.50 kB + 32.33 kB CSS.
+
+## What was not verified here
+
+- A physical thermal printer, ESC/POS commands and the cash-drawer kick-out: the layouts print through Chromium’s dialog, so the operator picks the 80mm/58mm paper size once. The drawer log is financial only.
+- The customer display is a full-screen panel on the same machine; a second physical monitor needs a second window (see DECISIONS §34).
+- No Electron window, NSIS installer or wine in this sandbox — same limitation as every earlier phase.

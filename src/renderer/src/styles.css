@@ -1019,6 +1019,119 @@ table.data tfoot td {
   color: #7a5a14;
 }
 
+/* Retail / wholesale tier switch */
+.seg-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.seg-toggle button {
+  border: 0;
+  background: transparent;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #5b6472;
+  cursor: pointer;
+}
+
+.seg-toggle button.active {
+  background: var(--navy);
+  color: #fff;
+}
+
+.seg-toggle button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Search hits under the customer / loyalty fields */
+.link-row {
+  text-align: left;
+  border: 1px solid var(--line);
+  background: #fbfaf7;
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.link-row:hover {
+  border-color: var(--gold);
+  background: #fff;
+}
+
+/* Customer-facing totals panel (second screen) */
+.customer-display {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: linear-gradient(160deg, #16294c 0%, #1f3f73 55%, #12213c 100%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  padding: 28px 36px;
+  gap: 18px;
+}
+
+.customer-display .cd-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 18px;
+  letter-spacing: 0.4px;
+  color: var(--gold);
+}
+
+.customer-display .cd-lines {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.customer-display .cd-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  font-size: clamp(16px, 2.2vw, 26px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding-bottom: 8px;
+}
+
+.customer-display .cd-qty {
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.75em;
+}
+
+.customer-display .cd-empty {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 22px;
+  margin: auto;
+}
+
+.customer-display .cd-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-top: 3px solid var(--gold);
+  padding-top: 14px;
+  font-size: clamp(28px, 4.5vw, 54px);
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+.customer-display .cd-change {
+  text-align: right;
+  font-size: clamp(18px, 2.4vw, 28px);
+  color: var(--gold);
+  font-weight: 700;
+}
+
 /* ---------------------------------------------------------------- */
 /* Document preview                                                  */
 /* ---------------------------------------------------------------- */

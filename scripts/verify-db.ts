@@ -38,6 +38,7 @@ import {
 } from '../src/services/marketing';
 import { addProductBarcode, saveProductVariant } from '../src/services/barcodes';
 import { closeDay, closeShift, logDrawerEvent, openShift } from '../src/services/operations';
+import { holdSale, printSaleDocument } from '../src/services/pos';
 import { nextDocumentNumber } from '../src/services/helpers';
 
 const failures: string[] = [];
@@ -237,6 +238,20 @@ function main(): number {
     logDrawerEvent(db, { eventType: 'NO_SALE', reason: 'Customer asked for change' }, actor);
     closeShift(db, { shiftId: shift.id, countedCash: 500_000 }, actor);
     check('shift closed', repos.shifts.findById(shift.id)!.status === 'CLOSED');
+
+    /* ---- till: parked basket and the print trail ---- */
+    const held = holdSale(
+      db,
+      { label: 'Verifier hold', total: 5_000, linesCount: 1, payload: { lines: [{ productId: product.id, qty: 1 }] } },
+      salesActor
+    );
+    check('held basket numbered', /^HLD-\d{6}$/.test(held.holdNo), held.holdNo);
+    const printed = printSaleDocument(db, { id: firstSale.id }, salesActor, features);
+    check('document printed with store name', printed.html.includes(getStoreProfile(db).storeName));
+    check('first print is an original', printed.duplicate === false);
+    const reprinted = printSaleDocument(db, { id: firstSale.id }, salesActor, features);
+    check('second print is a duplicate', reprinted.duplicate === true);
+    check('prints logged', repos.documentPrints.count({ sale_id: firstSale.id }) === 2);
 
     /* ---- day closing ---- */
     const closing = closeDay(
