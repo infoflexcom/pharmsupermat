@@ -30,7 +30,12 @@ export interface Harness {
   close(): void;
 }
 
-export function createHarness(): Harness {
+export interface HarnessOptions {
+  /** Injectable clock so licence/permit tests can travel in time. */
+  now?: () => Date;
+}
+
+export function createHarness(options: HarnessOptions = {}): Harness {
   const dir = mkdtempSync(join(tmpdir(), 'infoflex-test-'));
   const db = new Database(join(dir, 'test.db'));
   db.open();
@@ -38,7 +43,8 @@ export function createHarness(): Harness {
     db,
     dataDir: dir,
     backupsDir: join(dir, 'backups'),
-    version: 'test'
+    version: 'test',
+    ...(options.now ? { now: options.now } : {})
   });
   return {
     ctx,
@@ -48,6 +54,24 @@ export function createHarness(): Harness {
       db.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  };
+}
+
+/** A clock the test can move forwards (or backwards) at will. */
+export function controllableClock(start = new Date()): { now: () => Date; set: (date: Date) => void; advanceDays: (days: number) => void; advanceSeconds: (s: number) => void; current: () => Date } {
+  let current = new Date(start);
+  return {
+    now: () => new Date(current),
+    set: (date: Date) => {
+      current = new Date(date);
+    },
+    advanceDays: (days: number) => {
+      current = new Date(current.getTime() + days * 86_400_000);
+    },
+    advanceSeconds: (seconds: number) => {
+      current = new Date(current.getTime() + seconds * 1000);
+    },
+    current: () => new Date(current)
   };
 }
 

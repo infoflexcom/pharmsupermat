@@ -213,3 +213,56 @@ Verified on the same headless Linux sandbox.
 - `npm run db:verify` — 145 checks, 0 failed.
 - `npm run smoke` (against the harness on a fresh data dir) — 30/30 passed.
 - `npm run build` — main 137 kB, preload 0.32 kB, renderer 916 kB.
+
+---
+
+# Phase 4 verification — licence control, expiry and anti-tampering
+
+## Requirement checklist
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Branded "Activation Required" screen with logo, show/hide password, before setup and login | ✅ | `pages/ActivationPage.tsx`; renderer tests assert the heading, the toggle and that no edition branding appears |
+| Nothing else works until the master password is entered | ✅ | `invoke.ts` blocks every `license !== false` channel while `!license.usable`; test "blocks every business channel until a licence exists" |
+| Verify against a salted hash only | ✅ | scrypt hash in `src/license/vendor-secrets.json`; `npm run verify:secrets` scans 134 files and the build output |
+| After 5 wrong attempts, delays of 30s, 1m, 5m… | ✅ | `license_attempts` + `DELAY_LADDER_SECONDS`; test walks 5 → 30s wait → success → 5 more → 60s |
+| Every attempt logged without the typed value | ✅ | `license.master.verify*` audit rows store attempt number and delay only; test greps the audit `details` for the typed password |
+| Edition + start/end date with 1/2/3-year quick-select, End after Start | ✅ | `components/LicenseSetupForm.tsx`; date maths unit tests; validation tests |
+| Save edition + period in signed licence data, then continue to setup/login | ✅ | `activateLicense()` writes `starts_on`/`ends_on` + HMAC in one transaction; renderer tests click through both steps |
+| Check on launch, every few minutes and at midnight | ✅ | `startLicenseWatch()` in `src/main/index.ts` (60s interval + midnight timer) plus a renderer poll and a guard on every IPC call |
+| Ten-minute warning, sale can finish or be saved | ✅ | `LicenseBanners` warning + the POS basket persisted to `localStorage` and restored |
+| Lock the whole app with "License Expired — Software Update Required" | ✅ | `pages/LicenseLockPage.tsx`; renderer test asserts no app shell remains |
+| Admin banner 30 / 14 / 7 / 1 days before expiry | ✅ | `warning` in the status (thresholds) + `license-warning` banner; renderer tests |
+| Renewal asks for the password, then a new range; may change the edition | ✅ | Lock screen step 2 → `license.activate`; edition change writes an `EDITION_CHANGE` history row |
+| Renewal refuses an old range and requires a future end date | ✅ | `validatePeriod` + `periodAlreadyUsed`; tests for both refusals |
+| Unlock only after a valid range; history kept in `license_state`/audit | ✅ | `license_history` (append-only) + `license.activate/renew/edition.change/unlock` audit rows |
+| Renewal never asks for or changes store details | ✅ | Guard code touches only licence tables; test reads `settings.storeName` after renewal |
+| Clock rollback detection with a signed last-seen stamp | ✅ | `last_seen_at` + `last_seen_hmac`; rollback test locks, refuses a wrong password and clears with the right one |
+| HMAC over the licence data; modified/missing → lock + password | ✅ | `period_hmac` verified in `computeLicenseStatus`; tamper test edits `ends_on` and gets `TAMPERED` + `LICENSE_LOCKED` |
+| Guard logic in the main process | ✅ | `src/license/guard.ts` is imported only by main-side modules; the renderer gets a status object |
+| ASAR packaging + obfuscation/minification for the licence module | ✅ (partial) | `asar: true` + `compression: maximum`; `out/main/index.js` is a 165 kB minified bundle. Real obfuscation is documented as out of scope in `docs/DECISIONS.md` §30 |
+| Protection limits documented | ✅ | `docs/DECISIONS.md` §30 "Realistic limits of this protection" |
+| Locking never deletes, corrupts or encrypts business data | ✅ | No delete/encrypt path in the guard; tests read products, settings and users after expiry and renewal |
+| Lock screen says "Your data is safe. Enter the update password to continue." | ✅ | `pages/LicenseLockPage.tsx`; asserted by a renderer test |
+
+## DONE WHEN
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| (1) A fresh install is blocked until the right password is entered | ✅ | `tests/license-guard.test.ts` — unlicensed state refuses setup, login and sales |
+| (2) A wrong password never gets through | ✅ | Wrong password test incl. the delay ladder |
+| (3) Edition + dates start the app with the correct modules | ✅ | Pharmacy/supermarket/both feature tests + `EDITION_RESTRICTED` on the wrong module |
+| (4) An end date of today or earlier locks the app | ✅ | Exclusive end date; activation refuses `endsOn <= today`; time-travel test locks on the end date |
+| (5) Renewal unlocks with all data and store details intact | ✅ | Expiry + renewal test; smoke "renewal with a new range keeps every record intact" |
+| (6) Moving the clock backwards triggers the lock | ✅ | Clock rollback test and unlock path |
+| (7) The password appears nowhere in plain text | ✅ | `npm run verify:secrets` (134 files incl. `out/`), plus the automated test that walks the repo |
+
+## Verification run
+
+- `npm run typecheck` — clean (node + web).
+- `npm test` — 13 files, **106 tests** passed.
+- `npm run db:verify` — **154 checks**, 0 failed (30 tables, now including
+  `license_history`, `license_attempts`, `license_guard`).
+- `npm run smoke` — **32/32** passed on a fresh data directory.
+- `npm run build` — main 165 kB (minified), preload 0.64 kB, renderer 932 kB.
+- `VENDOR_MASTER_PASSWORD=… npm run verify:secrets` — PASS.

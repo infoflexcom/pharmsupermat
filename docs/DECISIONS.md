@@ -393,3 +393,88 @@ and neither component silently loses its colour.
   `LicensePage` are still the phase-1 screens; they work against the same typed
   IPC layer but have not been visually re-skinned to the phase-3 design.
 - The Windows NSIS installer still has to be built on Windows (see §25).
+
+## 30. Phase 4 — licence control, expiry and anti-tampering
+
+**Two signing layers, one record.** The vendor tool can still issue an
+Ed25519-signed activation code (`IFX1.payload.signature`, verified with a public
+key compiled into the app). On top of that, every install stores its active
+period in `license_state` signed with an **HMAC-SHA256** whose key is derived
+(HKDF) from a random per-install secret in `license_guard` *plus* a machine
+fingerprint (hostname, platform, arch, CPU model). Editing the row, copying just
+the row to another PC, or deleting the secret breaks the HMAC and locks the app.
+
+**The end date is exclusive.** A period runs from `starts_on` up to, but not
+including, `ends_on`; the app locks at 00:00 on the end date. This is what makes
+"an end date of today or earlier locks the app" true without a one-day grace
+period, and the activation screen says so under the field. The renderer, the
+guard and the tests all use `src/shared/license-dates.ts`, so no side can compute
+a different day.
+
+**States.** `NONE` (never activated), `VALID`, `EXPIRING` (≤30 days left),
+`EXPIRED`, `NOT_STARTED` (restored licence whose start is in the future),
+`TAMPERED` (HMAC mismatch), `CLOCK_ROLLBACK`. Only `VALID`/`EXPIRING` set
+`usable: true`. The invoke guard checks `usable` **before** the edition-module
+check and before sessions, so an expired or tampered install cannot reach a
+business handler even with a valid token — the UI lock screen is a courtesy, not
+the enforcement.
+
+**Rate limiting is stored, not timed in memory.** `license_attempts` records the
+outcome of every master-password attempt; five wrong ones start a delay ladder of
+30s, 1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 24h, measured from the **last** wrong
+attempt, so restarting the app does not clear it. A correct password resets the
+counter. Only the outcome and the attempt number are written to the audit log —
+never the typed value.
+
+**Clock rollback.** Every guard pass stamps `last_seen_at` (throttled to once a
+minute) with its own HMAC. If the current time is more than two minutes earlier
+than that stamp, the row is marked `lock_reason = 'CLOCK_ROLLBACK'`, audited, and
+the app locks until the vendor enters the master password (`license.unlock`).
+Two minutes of tolerance leaves room for NTP corrections.
+
+**Renewal keeps history.** `license_history` is append-only: every activation,
+renewal, edition change and unlock is a row with the signed period. Renewal
+refuses an end date that is not in the future and refuses to replay a period
+that already ended; re-signing the *currently running* signed period is allowed
+(an edition change mid-term, or repairing a tampered row), because that period
+was already issued by the vendor. Renewal never touches the store profile,
+users, sales or any other business table.
+
+**Locking never destroys data.** There is no encryption-at-rest keyed on the
+licence and no delete path in the guard: expiry hides the UI and refuses IPC
+calls. The lock screen says so, because that is the customer's first question.
+
+### Realistic limits of this protection
+
+Everything below is protected against a *casual* local attacker, and nothing
+here is DRM-grade:
+
+- **HMAC, not a signature.** The key is derived inside the app, so someone who
+  reverse-engineers the minified main bundle (or the ASAR archive) can recompute
+  a valid HMAC for any dates. The Ed25519 activation-code path removes that
+  option for the code-based flow, but the app still needs to verify with a public
+  key it ships, and a patched binary can skip the check entirely.
+- **The clock is the customer's.** Rollback detection catches a backwards jump,
+  but a patient attacker can keep the clock frozen inside the paid period, edit
+  the SQLite file's `last_seen_at` (which fails the HMAC) — or patch the guard.
+  There is no online time source because the app must work offline.
+- **Machine fingerprinting is a tamper signal, not a licence lock.** Restoring a
+  backup onto a new PC (different hostname/CPU) breaks the HMAC and requires the
+  master password, which is a deliberate trade-off: it stops copy-the-database,
+  but it does mean a legitimate hardware change needs a vendor visit.
+- **ASAR and minification are speed bumps.** `asar: true`, `compression: maximum`
+  and an esbuild-minified main bundle hide logic and comments; they do not stop
+  a determined attacker with a debugger. Real protection against determined
+  piracy would need hardware binding plus an online activation authority, which
+  contradicts the offline requirement.
+- **What the protection *is* good for:** a shop assistant cannot extend the
+  licence, the licence cannot be silently edited with DB Browser, a copied
+  database does not work on another till, and every attempt is in the audit log.
+
+## 31. Known limitations after phase 4
+
+- The licence guard is minified but not obfuscated beyond esbuild's mangling; see
+  the limits above.
+- The Windows NSIS installer still has to be built on Windows (see §25).
+- The smoke test seeds demo data and is not idempotent: it must run against a
+  fresh `INFOFLEX_DATA_DIR`, and a second activation must use a new period.

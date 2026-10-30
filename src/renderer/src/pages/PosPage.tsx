@@ -56,6 +56,7 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
   const [receipt, setReceipt] = useState<{ html: string; sale: Sale } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const draftKey = `infoflex.cart.${mode}`;
 
   const loadProducts = useCallback(
     async (term: string) => {
@@ -68,6 +69,31 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
   useEffect(() => {
     void loadProducts('');
   }, [loadProducts]);
+
+  /**
+   * The basket survives a licence lock, a reload or a crash: it is written to
+   * localStorage on every change and restored when the POS opens again. That is
+   * what "an in-progress sale can be saved" means when the clock hits midnight.
+   */
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(draftKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as CartLine[];
+      if (Array.isArray(parsed) && parsed.length > 0) setCart(parsed);
+    } catch {
+      /* ignore a corrupt draft */
+    }
+  }, [draftKey]);
+
+  useEffect(() => {
+    try {
+      if (cart.length > 0) window.localStorage.setItem(draftKey, JSON.stringify(cart));
+      else window.localStorage.removeItem(draftKey);
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, [cart, draftKey]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadProducts(search), 180);

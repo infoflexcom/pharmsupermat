@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useApp } from './state';
 import { Layout, type ViewKey } from './components/Layout';
 import ActivationPage from './pages/ActivationPage';
+import LicenseLockPage from './pages/LicenseLockPage';
 import SetupPage from './pages/SetupPage';
 import LoginPage from './pages/LoginPage';
 import ChangePasswordPage from './pages/ChangePasswordPage';
@@ -58,8 +59,9 @@ export default function App() {
 
   if (!state) return null;
 
-  const licensed = state.license.state === 'VALID' || state.license.state === 'EXPIRING';
-  if (!licensed) return <ActivationPage />;
+  // Licence gate runs before setup, login and every other screen.
+  if (state.license.state === 'NONE') return <ActivationPage />;
+  if (!state.license.usable) return <LicenseLockPage />;
   if (state.setup.setupRequired) return <SetupPage />;
   if (!state.session) return <LoginPage />;
   if (state.session.mustChangePassword) return <ChangePasswordPage />;

@@ -2,6 +2,11 @@ appId: com.infoflex.pos
 productName: Infoflex
 copyright: Copyright © 2026 Infoflex. All rights reserved.
 
+# Everything ships inside an asar archive (the SQLite binary is unpacked) so the
+# main-process licence guards are not a loose folder of readable files.
+asar: true
+compression: maximum
+
 directories:
   output: release
   buildResources: resources/build

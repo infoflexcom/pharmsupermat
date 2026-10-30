@@ -60,7 +60,7 @@ export function storeNamePlaceholder(edition: Edition | null | undefined): strin
 export function getSetupStatus(db: Database, license: LicenseStatus): SetupStatus {
   const adminConfigured = countAdmins(db, false) > 0;
   const storeConfigured = isStoreConfigured(db);
-  const licensed = license.state === 'VALID' || license.state === 'EXPIRING';
+  const licensed = license.usable;
   return {
     licensed,
     storeConfigured,

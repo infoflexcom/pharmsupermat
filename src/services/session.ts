@@ -5,6 +5,7 @@ import { permissionsForRole, type Permission } from '../shared/permissions';
 import { findUserById } from './auth';
 import { idleTimeoutMs } from './settings';
 import { getLicenseStatus } from '../license/license';
+import { backfillLegacyLicense } from '../license/guard';
 
 export interface Session {
   token: string;
@@ -50,6 +51,13 @@ export function createContext(options: {
   now?: () => Date;
   print?: (payload: { html: string; title: string }) => Promise<{ printed: boolean; message: string }>;
 }): ApiContext {
+  // Licences written before migration v4 have no HMAC yet: sign them once, in
+  // main, before anything reads the status. A tampered row is never blessed.
+  try {
+    backfillLegacyLicense(options.db);
+  } catch (error) {
+    console.error('[license] legacy backfill failed', error);
+  }
   return {
     db: options.db,
     dataDir: options.dataDir,

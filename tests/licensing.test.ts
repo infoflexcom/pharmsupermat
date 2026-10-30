@@ -109,13 +109,11 @@ describe('licensing', () => {
 
   it('detects a licence row edited outside the app', async () => {
     const { h } = await bootstrap('PHARMACY');
-    h.db.handle
-      .prepare("UPDATE license_state SET activation_code = 'IFX1.forged.signature' WHERE id = 1")
-      .run();
+    h.db.handle.prepare("UPDATE license_state SET ends_on = '2099-12-31' WHERE id = 1").run();
     const status = await callOk<LicenseStatus>(h, 'license.status');
-    expect(status.state).toBe('INVALID');
+    expect(status.state).toBe('TAMPERED');
     const err = await callErr(h, 'products.list', {});
-    expect(err.code).toBe('LICENSE_REQUIRED');
+    expect(err.code).toBe('LICENSE_LOCKED');
     h.close();
   });
 

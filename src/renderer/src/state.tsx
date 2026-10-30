@@ -70,6 +70,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [refreshState]);
 
   /**
+   * Licence heartbeat: re-read the state every minute so expiry at midnight, a
+   * renewed licence or a lock decided in main shows up without a relaunch. The
+   * main process paints the same picture on every IPC call.
+   */
+  useEffect(() => {
+    const timer = window.setInterval(() => void refreshState(), 60_000);
+    const midnight = () => {
+      const now = new Date();
+      const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+      return window.setTimeout(() => {
+        void refreshState();
+      }, Math.max(1_000, next.getTime() - now.getTime()));
+    };
+    const midnightTimer = midnight();
+    const unsubscribe = window.infoflex?.onLicenseLocked?.(() => {
+      void refreshState();
+    });
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(midnightTimer);
+      unsubscribe?.();
+    };
+  }, [refreshState]);
+
+  /**
    * Idle auto sign-out. The main process enforces the same limit on every call,
    * so a renderer that ignores this timer still loses the session; this just
    * returns the user to the login screen politely.

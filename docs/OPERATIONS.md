@@ -140,10 +140,38 @@ events (no-sale, paid in, paid out), then close with the counted cash. Only the
 cashier who opened the shift can close it; the expected cash comes from the cash
 payments recorded against that shift, and every event is in the audit log.
 
-**First run**: activate the licence with the master password, then the setup
-screen asks for the administrator account and the shop's details together. The
-store name is mandatory; the logo is optional (PNG/JPEG/WebP/SVG up to 200 KB).
-Settings cannot be reached again until you sign in as that administrator.
+**First run**: the app opens on *Activation Required*. Enter the vendor master
+password, then choose the edition (Pharmacy / Supermarket / Both) and the licence
+period — the 1/2/3-year buttons fill the end date. The end date is exclusive: the
+app locks at 00:00 on that date. After that the setup screen asks for the
+administrator account and the shop's details together.
+
+**Licence expiry**: an admin banner appears at 30, 14, 7 and 1 days before the
+end date, and everyone sees a ten-minute warning that the current sale should be
+finished or saved (the basket is kept in the window and restored afterwards). On
+the end date the whole app is replaced by **License Expired — Software Update
+Required**. That screen says the data is safe; it is.
+
+**Renewing (software update)**: on the locked screen enter the vendor master
+password, then pick a new period (the end date must be in the future and a period
+that already ended cannot be reused). The edition may be changed at the same
+time. Renewal never asks for the store details and never changes them. The same
+form lives in **Licence** inside the app for renewing before expiry.
+
+**Wrong passwords**: five wrong master-password attempts start a 30-second wait,
+then 1 minute, 5 minutes, 15 minutes, 30 minutes, 1 hour, 2 hours, 4 hours, 8
+hours and finally 24 hours. The delay is stored in the database, so closing the
+app does not reset it.
+
+**Clock changes**: if the computer clock is set earlier than the last time the
+app ran (more than two minutes), the app locks and asks for the master password
+once; correct the clock first. Restoring a backup onto a different computer also
+requires the master password, because the licence is bound to the machine.
+
+**Store details**: the setup screen asks for the administrator account and the
+shop's details together. The store name is mandatory; the logo is optional
+(PNG/JPEG/WebP/SVG up to 200 KB). Settings cannot be reached again until you sign
+in as that administrator.
 
 **Locked accounts**: five wrong passwords lock the account until an administrator
 opens Users and clicks Unlock. The lock is stored in the database, so closing and
@@ -163,16 +191,20 @@ categories and barcodes, and keeps every row; schema v3 adds `users.email`, `use
 `users.locked_until`/`locked_reason`, `users.password_algo` and the store-profile
 settings (email, PCN/NAFDAC number, VAT number, logo, thank-you note, idle
 timeout) with defaults, so existing accounts keep working with their scrypt
-hashes until the next sign-in upgrades them to bcrypt. Take a backup first if you
-want a rollback point.
+hashes until the next sign-in upgrades them to bcrypt. Schema v4 adds licence
+periods (`starts_on`/`ends_on`), the HMAC columns, `last_seen_*`, the lock reason,
+and the `license_history`, `license_attempts` and `license_guard` tables; an
+existing licence is signed once on first start with its old expiry as the first
+invalid day. Take a backup first if you want a rollback point.
 
 ## 10. Troubleshooting
 
 | Symptom | What to do |
 | --- | --- |
-| "Licence has expired" | Activation screen: enter the master password and a new code/expiry |
-| "The vendor master password is not correct" | Check capitalisation; 5 wrong logins throttle the account for 60s (users only) |
+| "License Expired — Software Update Required" | Enter the vendor master password on that screen and choose a new end date in the future |
+| "The vendor master password is not correct" | Check capitalisation; after five wrong attempts the app waits 30s, then 1m, 5m… (the wait is shown) |
 | Receipt prints the wrong store name | Old documents keep their snapshot by design; change the store name in Settings for new ones |
 | "Only expired stock is available" | Receive a fresh batch (Products → Receive) or adjust the expired batch to zero |
 | App won't open a second time | It is a single-instance app — check the taskbar or Task Manager for an existing window |
 | "better-sqlite3 was compiled against a different Node.js version" | `npm run rebuild:electron` (app) or `npm run rebuild:node` (tests) |
+| "System clock change detected" | Set the computer clock correctly, then enter the vendor master password |

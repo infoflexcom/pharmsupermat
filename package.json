@@ -14,6 +14,7 @@
     "start": "electron-vite preview",
     "test": "vitest run",
     "db:verify": "tsx scripts/verify-db.ts",
+    "verify:secrets": "tsx scripts/verify-secrets.ts",
     "db:schema": "tsx scripts/gen-schema-doc.ts",
     "test:watch": "vitest",
     "vendor:keys": "tsx scripts/gen-vendor-secrets.ts",

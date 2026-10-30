@@ -2,6 +2,7 @@ import React from 'react';
 import logoUrl from '../assets/logo.png';
 import { useApp } from '../state';
 import { ROLE_LABELS } from '../../../shared/permissions';
+import type { AppState } from '../../../shared/types';
 import { Icon, type IconName } from './icons';
 import { Button } from './ui';
 
@@ -195,8 +196,55 @@ export function Layout({
             <Icon name="logout" size={15} /> Sign out
           </Button>
         </header>
+        <LicenseBanners />
         <main className="content">{children}</main>
       </div>
+    </div>
+  );
+}
+
+function minutesLeft(license: NonNullable<AppState['license']>, now: number): number {
+  if (!license.expiresAt) return 0;
+  return Math.max(0, Math.ceil((Date.parse(license.expiresAt) - now) / 60_000));
+}
+
+/**
+ * Licence banners. Admins get the 30 / 14 / 7 / 1 day renewal reminder; every
+ * user gets the ten-minute "finish or save your sale" warning. The hard lock is
+ * enforced in the main process, so this is a courtesy, not the safety net.
+ */
+function LicenseBanners() {
+  const { state, session } = useApp();
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const license = state?.license;
+  if (!license || !license.usable) return null;
+
+  const minutes = license.expiresAt ? minutesLeft(license, now) : 0;
+  const endingSoon = Boolean(license.expiresAt) && minutes <= 10;
+  const warning = license.warning;
+
+  if (!endingSoon && !warning) return null;
+
+  return (
+    <div className="license-banners">
+      {endingSoon ? (
+        <div className="license-banner danger" role="alert" data-testid="license-ending-soon">
+          <strong>Licence ends in {minutes} minute{minutes === 1 ? '' : 's'}.</strong> Finish or save the
+          sale you are on — the app locks at 00:00 and needs the vendor password to reopen.
+        </div>
+      ) : null}
+      {warning ? (
+        <div className={`license-banner ${warning.level <= 7 ? 'warn' : 'info'}`} role="status" data-testid="license-warning">
+          <strong>Licence ends in {license.daysRemaining} day{license.daysRemaining === 1 ? '' : 's'}.</strong>{' '}
+          {session?.role === 'ADMIN'
+            ? 'Renew it from Licence before the lock appears.'
+            : 'Tell the administrator so they can renew it.'}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { Database } from '../db';
 import { createContext, type ApiContext } from '../services/session';
 import { invoke } from './api/invoke';
 import { getLicenseStatus } from '../license/license';
+import { evaluateLicense } from '../license/guard';
 import { productNameForEdition } from '../shared/editions';
 import { printHtml } from './print/printer';
 import { createBackup, listBackups } from '../services/backup';
@@ -21,6 +22,41 @@ const dataDir = join(app.getPath('userData'), 'data');
 const backupsDir = join(app.getPath('userData'), 'backups');
 const dbPath = join(dataDir, 'infoflex.db');
 const iconPath = join(__dirname, '../../resources/icon.png');
+
+let licenseTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Licence watch — the main process re-checks the licence every minute (which
+ * covers "every few minutes while running" and the midnight rollover) and tells
+ * the renderer to show the lock screen. The renderer polls too; neither side is
+ * trusted on its own.
+ */
+function startLicenseWatch(): void {
+  if (licenseTimer) return;
+  const tick = () => {
+    if (!ctx) return;
+    try {
+      const { status } = evaluateLicense(ctx.db);
+      if (!status.usable && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('infoflex:licenseLocked', status);
+      }
+    } catch (error) {
+      console.error('[license] watch failed', error);
+    }
+  };
+  licenseTimer = setInterval(tick, 60_000);
+  // Re-check exactly when the day rolls over so the lock lands at midnight.
+  const scheduleMidnight = () => {
+    const now = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 2);
+    setTimeout(() => {
+      tick();
+      scheduleMidnight();
+    }, Math.max(1_000, next.getTime() - now.getTime()));
+  };
+  scheduleMidnight();
+  tick();
+}
 
 function currentProductName(): string {
   if (!ctx) return 'Infoflex';
@@ -206,6 +242,7 @@ app.whenReady().then(async () => {
     print: printHtml
   });
   ensureDailyBackup(ctx);
+  startLicenseWatch();
 
   ipcMain.handle('infoflex:invoke', async (_event, channel: string, payload: unknown) => {
     if (!ctx) return { ok: false, error: { code: 'INTERNAL', message: 'App is starting.' } };
@@ -245,7 +282,7 @@ app.on('before-quit', () => {
     if (ctx) {
       if (mainWindow && !mainWindow.isDestroyed()) {
         const license = getLicenseStatus(ctx.db);
-        if (license.state === 'VALID' || license.state === 'EXPIRING') {
+        if (license.usable) {
           createBackup(ctx.db, backupsDir, 'shutdown');
         }
       }

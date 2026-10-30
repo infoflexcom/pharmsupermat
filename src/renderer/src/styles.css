@@ -1563,3 +1563,112 @@ table.data tfoot td {
     align-items: flex-start;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Licence: activation wizard, lock screen, banners                    */
+/* ------------------------------------------------------------------ */
+
+.edition-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.edition-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.edition-card:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--navy);
+}
+
+.edition-card.active {
+  border-color: var(--navy);
+  box-shadow: 0 0 0 2px rgba(31, 63, 115, 0.15);
+  background: #f7f9fd;
+}
+
+.edition-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.edition-title {
+  font-weight: 700;
+  color: var(--navy);
+  font-size: 13px;
+}
+
+.edition-product {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.edition-blurb {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--navy);
+  color: var(--navy);
+}
+
+.lock-screen .auth-card {
+  border-top: 4px solid #b42318;
+}
+
+.license-banners {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 22px;
+  margin-top: 12px;
+}
+
+.license-banner {
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-size: 12.5px;
+  border: 1px solid var(--line);
+  background: #f4f7fd;
+  color: #1b3a66;
+}
+
+.license-banner.warn {
+  background: #fdf6e7;
+  border-color: #e2c67a;
+  color: #7a5a10;
+}
+
+.license-banner.danger {
+  background: #fdecea;
+  border-color: #e6a39c;
+  color: #8f1d12;
+}
+
+@media (max-width: 720px) {
+  .edition-grid {
+    grid-template-columns: 1fr;
+  }
+}

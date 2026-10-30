@@ -109,6 +109,25 @@ function main(): number {
       activated_by: 'verify-script',
       note: 'Written by scripts/verify-db.ts'
     });
+    /* licence guard tables (phase 4): per-install secret, attempt ledger, history */
+    const nowIso = new Date().toISOString();
+    const today = new Date().toISOString().slice(0, 10);
+    const nextYear = new Date(Date.now() + 365 * 86_400_000).toISOString().slice(0, 10);
+    db.handle
+      .prepare('INSERT OR REPLACE INTO license_guard (id, secret, created_at) VALUES (1, ?, ?)')
+      .run('verify-install-secret', nowIso);
+    db.handle
+      .prepare(
+        'INSERT INTO license_attempts (created_at, outcome, failures_after, delay_seconds, source) VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(nowIso, 'OK', 0, 0, 'verify-script');
+    db.handle
+      .prepare(
+        `INSERT INTO license_history (license_id, edition, customer_name, starts_on, ends_on, action, period_hmac, created_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run('IFX-VERIFY', 'BOTH', 'Verification Customer', today, nextYear, 'ACTIVATE', 'verify-hmac', nowIso, 'verify-script');
+
     repos.settings.insert({ key: 'verification.marker', value: 'ok', updated_at: new Date().toISOString() });
     repos.sessionsMeta.insert({ key: 'verification.marker', value: new Date().toISOString() });
 

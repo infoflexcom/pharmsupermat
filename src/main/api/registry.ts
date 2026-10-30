@@ -6,7 +6,15 @@ import type { HandlerArgs } from './invoke';
 import { actor, payloadOf, requireSession, salesActor } from './args';
 import { EDITION_MODULES, editionHandlers } from '../../editions';
 
-import { activateLicense, getLicenseStatus, signLicensePayload, buildLicensePayload } from '../../license/license';
+import {
+  activateLicense,
+  buildLicensePayload,
+  checkMasterPassword,
+  getLicenseHistory,
+  getLicenseStatus,
+  signLicensePayload,
+  unlockLicense
+} from '../../license/license';
 import { getAppState, completeSetup, getSetupStatus } from '../../services/app';
 import { authenticate, changePassword } from '../../services/auth';
 import { audit, listAudit } from '../../services/audit';
@@ -65,7 +73,6 @@ import { createBackup, listBackups, restoreBackup } from '../../services/backup'
 import { toUserAccount } from '../../services/auth';
 import { buildCreditNoteDocument, buildSaleDocument } from '../../services/documents';
 import { createSession, dropSession, refreshSessionPermissions } from '../../services/session';
-import { verifyVendorPassword } from '../../license/license';
 import { getStoreProfile } from '../../services/settings';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -132,16 +139,30 @@ export const CORE_HANDLERS: Handler[] = [
     license: false,
     handler: (args) => {
       const { masterPassword } = payloadOf<{ masterPassword: string }>(args);
-      const ok = verifyVendorPassword(masterPassword ?? '');
-      audit(args.ctx.db, {
-        action: ok ? 'license.master.verify.ok' : 'license.master.verify.failed',
-        entity: 'license',
-        severity: ok ? 'SECURITY' : 'SECURITY',
-        username: args.session?.username ?? 'vendor'
-      });
-      if (!ok) throw new AppError('FORBIDDEN', 'The vendor master password is not correct.');
-      return { ok: true };
+      return checkMasterPassword(args.ctx.db, masterPassword ?? '', args.ctx.now());
     }
+  },
+  {
+    channel: 'license.unlock',
+    auth: false,
+    license: false,
+    handler: (args) => {
+      const { masterPassword } = payloadOf<{ masterPassword: string }>(args);
+      const status = unlockLicense(
+        args.ctx.db,
+        masterPassword ?? '',
+        args.session?.username ?? 'vendor',
+        args.ctx.now()
+      );
+      refreshSessionPermissions(args.ctx, status);
+      return status;
+    }
+  },
+  {
+    channel: 'license.history',
+    license: false,
+    permission: 'license.manage',
+    handler: (args) => getLicenseHistory(args.ctx.db, 50)
   },
   {
     channel: 'license.activate',
@@ -152,29 +173,18 @@ export const CORE_HANDLERS: Handler[] = [
         masterPassword: string;
         activationCode?: string;
         edition?: 'PHARMACY' | 'SUPERMARKET' | 'BOTH';
+        startsOn?: string;
+        endsOn?: string;
         customerName?: string;
         expiresAt?: string;
         note?: string;
       }>(args);
-      const before = getLicenseStatus(args.ctx.db);
-      const status = activateLicense(args.ctx.db, {
-        ...payload,
-        activatedBy: args.session?.username ?? 'vendor'
-      });
+      const status = activateLicense(
+        args.ctx.db,
+        { ...payload, activatedBy: args.session?.username ?? 'vendor' },
+        args.ctx.now()
+      );
       refreshSessionPermissions(args.ctx, status);
-      audit(args.ctx.db, {
-        action: before.state === 'NONE' ? 'license.activate' : 'license.renew',
-        entity: 'license',
-        entityId: status.customerName,
-        username: args.session?.username ?? 'vendor',
-        severity: 'SECURITY',
-        details: {
-          edition: status.edition,
-          customerName: status.customerName,
-          expiresAt: status.expiresAt,
-          mode: payload.activationCode ? 'activation-code' : 'vendor-issue'
-        }
-      });
       return status;
     }
   },

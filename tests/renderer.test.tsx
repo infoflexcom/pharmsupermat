@@ -24,9 +24,16 @@ const license = (over: Partial<LicenseStatus> = {}): LicenseStatus => ({
   customerName: 'Grace Pharmacy Ikeja',
   issuedAt: new Date().toISOString(),
   expiresAt: new Date(Date.now() + 86_400_000 * 300).toISOString(),
+  startsOn: '2026-01-01',
+  endsOn: new Date(Date.now() + 86_400_000 * 300).toISOString().slice(0, 10),
   daysRemaining: 300,
   features: featureFlags(),
   productName: 'Infoflex Pharm',
+  usable: true,
+  lockReason: null,
+  endingSoon: false,
+  warning: null,
+  serverTime: new Date().toISOString(),
   ...over
 });
 
@@ -124,7 +131,7 @@ describe('renderer boot flow', () => {
         }
       })
     );
-    expect(el.textContent).toContain('Activate Infoflex');
+    expect(el.textContent).toContain('Activation Required');
     expect(el.textContent).toContain('Strategy | Consulting | Innovation');
     expect(el.textContent).toContain('Vendor master password');
   });

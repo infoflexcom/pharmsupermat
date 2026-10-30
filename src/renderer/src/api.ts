@@ -11,6 +11,7 @@ export interface InfoflexBridge {
   isDesktop: true;
   invoke: (channel: string, payload?: unknown) => Promise<unknown>;
   appInfo: () => Promise<{ version: string; dataDir: string; backupsDir: string; platform: string }>;
+  onLicenseLocked?: (callback: (status: unknown) => void) => (() => void);
 }
 
 declare global {

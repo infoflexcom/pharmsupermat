@@ -540,6 +540,73 @@ export const MIGRATIONS: Migration[] = [
       /* Sign-in and user-management events drive the security view. */
       CREATE INDEX IF NOT EXISTS idx_audit_action_created ON audit_log(action, created_at DESC);
     `
+  },
+  {
+    version: 4,
+    name: 'licence_periods_hmac_and_attempt_throttle',
+    sql: /* sql */ `
+      /* ---------------------------------------------------------------- *
+       * Licence periods (start/end business dates), HMAC integrity, the  *
+       * last-seen stamp used to detect a clock rollback, and the reason   *
+       * the app is currently locked (cleared by a vendor unlock).         *
+       * ---------------------------------------------------------------- */
+      ALTER TABLE license_state ADD COLUMN starts_on TEXT;
+      ALTER TABLE license_state ADD COLUMN ends_on TEXT;
+      ALTER TABLE license_state ADD COLUMN hmac TEXT;
+      ALTER TABLE license_state ADD COLUMN period_hmac TEXT;
+      ALTER TABLE license_state ADD COLUMN signed_at TEXT;
+      ALTER TABLE license_state ADD COLUMN renewed_at TEXT;
+      ALTER TABLE license_state ADD COLUMN last_seen_at TEXT;
+      ALTER TABLE license_state ADD COLUMN last_seen_hmac TEXT;
+      ALTER TABLE license_state ADD COLUMN lock_reason TEXT;
+      ALTER TABLE license_state ADD COLUMN locked_at TEXT;
+      ALTER TABLE license_state ADD COLUMN integrity_algo TEXT NOT NULL DEFAULT 'hmac-sha256';
+
+      /* Backfill business dates for installs that predate licence periods:
+         the old expiry timestamp becomes the first invalid day. */
+      UPDATE license_state
+         SET starts_on = COALESCE(starts_on, date(issued_at)),
+             ends_on = COALESCE(ends_on, date(expires_at, '+1 day')),
+             signed_at = COALESCE(signed_at, activated_at),
+             last_seen_at = COALESCE(last_seen_at, datetime('now'))
+       WHERE id = 1;
+
+      /* Every period and edition change ever saved, append-only. */
+      CREATE TABLE IF NOT EXISTS license_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        license_id TEXT NOT NULL,
+        edition TEXT NOT NULL CHECK (edition IN ('PHARMACY','SUPERMARKET','BOTH')),
+        customer_name TEXT NOT NULL DEFAULT '',
+        starts_on TEXT NOT NULL,
+        ends_on TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('ACTIVATE','RENEW','EDITION_CHANGE','UNLOCK')),
+        period_hmac TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        created_by TEXT NOT NULL DEFAULT 'vendor'
+      );
+      CREATE INDEX IF NOT EXISTS idx_license_history_created ON license_history(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_license_history_period ON license_history(starts_on, ends_on);
+
+      /* Master-password attempts: drives the 30s / 1m / 5m ... delay ladder.
+         Only the outcome is stored — never what was typed. */
+      CREATE TABLE IF NOT EXISTS license_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK (outcome IN ('OK','WRONG')),
+        failures_after INTEGER NOT NULL DEFAULT 0,
+        delay_seconds INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT 'vendor'
+      );
+      CREATE INDEX IF NOT EXISTS idx_license_attempts_created ON license_attempts(created_at DESC);
+
+      /* Per-install random secret used to derive the licence HMAC key. It lives
+         beside the licence record, so editing either one on its own fails. */
+      CREATE TABLE IF NOT EXISTS license_guard (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        secret TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `
   }
 ];
 

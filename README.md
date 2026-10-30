@@ -29,7 +29,8 @@ npm run dev:web             # http://localhost:4173
 
 # Checks
 npm run typecheck
-VENDOR_MASTER_PASSWORD='...' npm test      # 72 unit/integration/renderer tests
+VENDOR_MASTER_PASSWORD='...' npm test      # 106 unit/integration/renderer tests
+VENDOR_MASTER_PASSWORD='...' npm run verify:secrets   # proves the password is nowhere in plain text
 npm run db:verify           # writes + reads a row in every table on a temp database
 npm run db:schema           # regenerates docs/SCHEMA.md from the real migrations
 npm run smoke                              # end-to-end against a running instance

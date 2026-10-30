@@ -10,7 +10,7 @@ Infoflex keeps everything in one SQLite file inside the OS application-data fold
 
 Set `INFOFLEX_DATA_DIR` to override the folder (the browser preview and the smoke test do this).
 
-Schema version: **3** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy.
+Schema version: **4** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy, v4 licence_periods_hmac_and_attempt_throttle.
 
 ## Rules that apply to every table
 
@@ -23,7 +23,7 @@ Schema version: **3** (`PRAGMA user_version`), migrations: v1 initial, v2 shared
 
 ## Tables by edition
 
-- **Shared (all editions):** `users`, `roles`, `settings`, `audit_log`, `license_state`, `categories`, `suppliers`, `customers`, `products`, `stock_movements`, `sales`, `sale_items`, `payments`, `returns`, `return_items`, `purchases`, `purchase_items`, `day_closings`, `counters`, `sessions_meta`
+- **Shared (all editions):** `users`, `roles`, `settings`, `audit_log`, `license_state`, `license_history`, `license_attempts`, `license_guard`, `categories`, `suppliers`, `customers`, `products`, `stock_movements`, `sales`, `sale_items`, `payments`, `returns`, `return_items`, `purchases`, `purchase_items`, `day_closings`, `counters`, `sessions_meta`
 - **Pharmacy module:** `product_batches`
 - **Supermarket module:** `departments`, `promotions`, `price_rules`, `loyalty_members`, `loyalty_transactions`, `cashier_shifts`, `cash_drawer_events`, `product_barcodes`, `product_variants`
 
@@ -98,7 +98,7 @@ Indexes: `idx_audit_action`, `idx_audit_action_created`, `idx_audit_created`
 
 ### `license_state`
 
-Signed licence payload (edition, customer, expiry) plus activation metadata. Single row (id = 1).
+Active licence: edition, start/end business dates, HMAC, last-seen stamp and lock reason. Single row (id = 1).
 
 | Column | Type | Null | Default | Key |
 | --- | --- | --- | --- | --- |
@@ -112,6 +112,61 @@ Signed licence payload (edition, customer, expiry) plus activation metadata. Sin
 | `activated_at` | TEXT | NOT NULL | — |  |
 | `activated_by` | TEXT | yes | — |  |
 | `note` | TEXT | yes | — |  |
+| `starts_on` | TEXT | yes | — |  |
+| `ends_on` | TEXT | yes | — |  |
+| `hmac` | TEXT | yes | — |  |
+| `period_hmac` | TEXT | yes | — |  |
+| `signed_at` | TEXT | yes | — |  |
+| `renewed_at` | TEXT | yes | — |  |
+| `last_seen_at` | TEXT | yes | — |  |
+| `last_seen_hmac` | TEXT | yes | — |  |
+| `lock_reason` | TEXT | yes | — |  |
+| `locked_at` | TEXT | yes | — |  |
+| `integrity_algo` | TEXT | NOT NULL | `'hmac-sha256'` |  |
+
+### `license_history`
+
+Append-only history of every licence period, renewal and edition change.
+
+| Column | Type | Null | Default | Key |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes | — | PK |
+| `license_id` | TEXT | NOT NULL | — |  |
+| `edition` | TEXT | NOT NULL | — |  |
+| `customer_name` | TEXT | NOT NULL | `''` |  |
+| `starts_on` | TEXT | NOT NULL | — |  |
+| `ends_on` | TEXT | NOT NULL | — |  |
+| `action` | TEXT | NOT NULL | — |  |
+| `period_hmac` | TEXT | NOT NULL | — |  |
+| `created_at` | TEXT | NOT NULL | — |  |
+| `created_by` | TEXT | NOT NULL | `'vendor'` |  |
+
+Indexes: `idx_license_history_created`, `idx_license_history_period`
+
+### `license_attempts`
+
+Master-password attempt outcomes that drive the 30s/1m/5m delay ladder (never stores the typed value).
+
+| Column | Type | Null | Default | Key |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes | — | PK |
+| `created_at` | TEXT | NOT NULL | — |  |
+| `outcome` | TEXT | NOT NULL | — |  |
+| `failures_after` | INTEGER | NOT NULL | `0` |  |
+| `delay_seconds` | INTEGER | NOT NULL | `0` |  |
+| `source` | TEXT | NOT NULL | `'vendor'` |  |
+
+Indexes: `idx_license_attempts_created`
+
+### `license_guard`
+
+Per-install random secret used to derive the licence HMAC key.
+
+| Column | Type | Null | Default | Key |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes | — | PK |
+| `secret` | TEXT | NOT NULL | — |  |
+| `created_at` | TEXT | NOT NULL | — |  |
 
 ### `categories`
 
@@ -632,6 +687,7 @@ applies every newer migration inside a transaction (rollback on error) and bumps
 | 1 | initial |
 | 2 | shared_catalogue_partners_documents_and_edition_modules |
 | 3 | account_lockout_store_profile_and_idle_policy |
+| 4 | licence_periods_hmac_and_attempt_throttle |
 
 To add a migration: append a `{ version, name, sql }` entry, add any new table/column to
 `src/db/schema.ts`, run `npm run db:verify` (writes and reads a row in every table, checks the
@@ -644,4 +700,4 @@ manifest against the database) and `npm run db:schema` to refresh this page.
 SELECT 'sales', COUNT(*) FROM sales UNION ALL SELECT 'products', COUNT(*) FROM products;
 ```
 
-_30 tables documented; generated 2026-10-30T13:51:05.625Z by scripts/gen-schema-doc.ts._
+_33 tables documented; generated 2026-10-30T15:34:36.559Z by scripts/gen-schema-doc.ts._

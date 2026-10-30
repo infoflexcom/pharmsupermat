@@ -42,7 +42,14 @@ const state: AppState = {
     customerName: 'Grace Pharmacy',
     issuedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 86_400_000 * 200).toISOString(),
+    startsOn: '2026-01-01',
+    endsOn: new Date(Date.now() + 86_400_000 * 200).toISOString().slice(0, 10),
     daysRemaining: 200,
+    usable: true,
+    lockReason: null,
+    endingSoon: false,
+    warning: null,
+    serverTime: new Date().toISOString(),
     features,
     productName: 'Infoflex Pharm & Mart'
   },
@@ -133,6 +140,7 @@ const RESPONSES: Record<string, unknown> = {
   'audit.list': [],
   'backup.list': [],
   'settings.read': settings,
+  'license.history': [],
   'products.categories': []
 };
 

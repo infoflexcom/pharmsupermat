@@ -7,6 +7,11 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       outDir: 'out/main',
+      // The licence guard is the most sensitive code in the app: minify the main
+      // bundle (names are mangled and comments dropped) and ship it inside asar.
+      minify: 'esbuild',
+      sourcemap: false,
+      reportCompressedSize: false,
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') }
       }

@@ -51,6 +51,22 @@ export async function invoke(
     const license = getLicenseStatus(ctx.db, ctx.now());
     const features = license.features ?? LOCKED_FEATURES;
 
+    // A licence that is not usable locks everything except the handful of
+    // channels that can fix it. This check lives in main, so a renderer that
+    // ignores the lock screen still cannot reach a single business handler.
+    if (known.license !== false && !license.usable) {
+      const code =
+        license.state === 'EXPIRED' || license.state === 'NOT_STARTED'
+          ? 'LICENSE_EXPIRED'
+          : license.state === 'NONE'
+            ? 'LICENSE_REQUIRED'
+            : 'LICENSE_LOCKED';
+      return fail(code, license.message ?? 'A valid licence is required to continue.', {
+        state: license.state,
+        lockReason: license.lockReason
+      });
+    }
+
     // Edition modules are mounted at runtime: a channel from a module that the
     // licence does not include is rejected before any handler code is reached.
     const entry = handlerMapFor(features).get(channel);
@@ -59,15 +75,6 @@ export async function invoke(
     }
 
     session = resolveSession(ctx, payload.token);
-
-    if (entry.license !== false) {
-      if (license.state === 'NONE' || license.state === 'INVALID') {
-        return fail('LICENSE_REQUIRED', license.message ?? 'Activate your licence to continue.');
-      }
-      if (license.state === 'EXPIRED') {
-        return fail('LICENSE_EXPIRED', license.message ?? 'Your licence has expired.');
-      }
-    }
 
     if (entry.feature && !features[entry.feature]) {
       return fail(

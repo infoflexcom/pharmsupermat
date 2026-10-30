@@ -2,15 +2,50 @@ import { createDecipheriv, randomUUID, scryptSync, sign as cryptoSign } from 'no
 import vendorSecrets from './vendor-secrets.json';
 import { VENDOR_PUBLIC_KEY_SPKI_BASE64 } from './vendor-public-key';
 import { verifyPassword } from '../services/auth';
-import { verifyLicenseCode, encodeLicenseCode, canonicalPayload, daysUntil } from './code';
-import { featuresForEdition, isValidEdition, productNameForEdition } from '../shared/editions';
+import { verifyLicenseCode, encodeLicenseCode, canonicalPayload } from './code';
+import {
+  featuresForEdition,
+  isValidEdition,
+  productNameForEdition,
+  UNLICENSED_PRODUCT_NAME
+} from '../shared/editions';
 import type { Database } from '../db';
 import { nowIso } from '../db';
-import type { Edition, LicensePayload, LicenseState, LicenseStatus } from '../shared/types';
+import type {
+  Edition,
+  LicenseHistoryEntry,
+  LicensePayload,
+  LicenseSetupInput,
+  LicenseStatus,
+  MasterPasswordResult
+} from '../shared/types';
 import { AppError, validation } from '../shared/errors';
-import { getAllSettings } from '../services/settings';
+import { audit } from '../services/audit';
+import {
+  attemptState,
+  computeLicenseStatus,
+  delayForFailures,
+  evaluateLicense,
+  isBusinessDate,
+  localDate,
+  parseBusinessDate,
+  periodAlreadyUsed,
+  readLicenseRow,
+  readHistory,
+  recordAttempt,
+  recordFromRow,
+  requireUsableLicense,
+  signPeriod,
+  signLastSeen,
+  validatePeriod,
+  verifyPeriodSignature,
+  writeHistory,
+  type LicenseRecord
+} from './guard';
 
-const WARNING_DAYS = 30;
+export { readHistory as getLicenseHistory } from './guard';
+
+export const WARNING_DAYS = 30;
 
 interface VendorSecrets {
   algorithm: string;
@@ -78,6 +113,7 @@ export function buildLicensePayload(input: {
   expiresAt: string;
   note?: string;
   licenseId?: string;
+  issuedAt?: string;
 }): LicensePayload {
   if (!isValidEdition(input.edition)) throw validation('Choose a valid edition.');
   if (!input.customerName.trim()) throw validation('Customer / store name is required on the licence.');
@@ -89,39 +125,113 @@ export function buildLicensePayload(input: {
     licenseId: input.licenseId ?? randomUUID(),
     edition: input.edition,
     customerName: input.customerName.trim(),
-    issuedAt: new Date().toISOString(),
+    issuedAt: input.issuedAt ?? new Date().toISOString(),
     expiresAt: expires.toISOString(),
     note: input.note?.trim() || undefined
   };
 }
 
-export interface LicenseRow {
-  id: number;
-  edition: Edition;
-  customer_name: string;
-  license_id: string;
-  activation_code: string;
-  issued_at: string;
-  expires_at: string;
-  activated_at: string;
-  activated_by: string | null;
-  note: string | null;
-}
+/* ------------------------------------------------------------------ */
+/* Master password attempts                                            */
+/* ------------------------------------------------------------------ */
 
-export function readLicenseRow(db: Database): LicenseRow | undefined {
-  return db.handle.prepare('SELECT * FROM license_state WHERE id = 1').get() as LicenseRow | undefined;
-}
-
-export function saveLicense(
+/**
+ * Applies the 30s / 1m / 5m … ladder, verifies the password and records the
+ * attempt. Only the outcome is stored; the typed value is never logged.
+ */
+export function checkMasterPassword(
   db: Database,
-  payload: LicensePayload,
-  code: string,
-  activatedBy: string
-): void {
+  password: string,
+  now: Date = new Date(),
+  action = 'license.master.verify'
+): MasterPasswordResult {
+  const state = attemptState(db, now);
+  if (state.waitSeconds > 0) {
+    audit(db, {
+      action: `${action}.throttled`,
+      entity: 'license',
+      username: 'vendor',
+      severity: 'SECURITY',
+      details: { failures: state.failures, retryAfterSeconds: state.waitSeconds }
+    });
+    throw new AppError(
+      'FORBIDDEN',
+      `Too many wrong passwords. Try again in ${state.waitSeconds} second(s).`,
+      { retryAfterSeconds: state.waitSeconds, failures: state.failures }
+    );
+  }
+
+  const ok = verifyVendorPassword(password ?? '');
+  if (ok) {
+    recordAttempt(db, 'OK', 0, 0, now);
+    audit(db, { action, entity: 'license', username: 'vendor', severity: 'SECURITY', details: { attempt: state.failures + 1 } });
+    return { ok: true, failures: 0, retryAfterSeconds: 0 };
+  }
+
+  const failures = state.failures + 1;
+  const nextDelay = delayForFailures(failures);
+  recordAttempt(db, 'WRONG', failures, nextDelay, now);
+  audit(db, {
+    action: `${action}.failed`,
+    entity: 'license',
+    username: 'vendor',
+    severity: 'SECURITY',
+    details: { attempt: failures, delaySeconds: nextDelay }
+  });
+  throw new AppError('FORBIDDEN', 'The vendor master password is not correct.', {
+    failures,
+    retryAfterSeconds: nextDelay
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Period mapping from legacy signed payloads                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Old licences carried an inclusive expiry timestamp. The phase-4 model uses an
+ * exclusive end date, so a "23:59:59" expiry becomes the next day and anything
+ * earlier stays on its own date.
+ */
+export function endDateFromExpiry(expiresAt: string): string {
+  const date = new Date(expiresAt);
+  if (Number.isNaN(date.getTime())) throw validation('Licence expiry date is invalid.');
+  const endOfDay = date.getHours() >= 23 && date.getMinutes() >= 55;
+  const day = localDate(date);
+  if (!endOfDay) return day;
+  return localDate(new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1));
+}
+
+function recordFor(
+  edition: Edition,
+  startsOn: string,
+  endsOn: string,
+  customerName: string,
+  issuedAt: string,
+  licenseId: string
+): LicenseRecord {
+  return { licenseId, edition, customerName, startsOn, endsOn, issuedAt };
+}
+
+function persist(
+  db: Database,
+  record: LicenseRecord,
+  options: {
+    action: LicenseHistoryEntry['action'];
+    activatedBy: string;
+    activationCode?: string;
+    note?: string | null;
+  }
+): string {
+  const signature = signPeriod(db, record);
+  const seenAt = nowIso();
   db.handle
     .prepare(
-      `INSERT INTO license_state (id, edition, customer_name, license_id, activation_code, issued_at, expires_at, activated_at, activated_by, note)
-       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO license_state
+         (id, edition, customer_name, license_id, activation_code, issued_at, expires_at,
+          activated_at, activated_by, note, starts_on, ends_on, hmac, period_hmac, signed_at,
+          renewed_at, last_seen_at, last_seen_hmac, lock_reason, locked_at, integrity_algo)
+       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'hmac-sha256')
        ON CONFLICT(id) DO UPDATE SET
          edition = excluded.edition,
          customer_name = excluded.customer_name,
@@ -131,138 +241,296 @@ export function saveLicense(
          expires_at = excluded.expires_at,
          activated_at = excluded.activated_at,
          activated_by = excluded.activated_by,
-         note = excluded.note`
+         note = excluded.note,
+         starts_on = excluded.starts_on,
+         ends_on = excluded.ends_on,
+         hmac = excluded.hmac,
+         period_hmac = excluded.period_hmac,
+         signed_at = excluded.signed_at,
+         renewed_at = excluded.renewed_at,
+         last_seen_at = excluded.last_seen_at,
+         last_seen_hmac = excluded.last_seen_hmac,
+         lock_reason = NULL,
+         locked_at = NULL,
+         integrity_algo = excluded.integrity_algo`
     )
     .run(
-      payload.edition,
-      payload.customerName,
-      payload.licenseId,
-      code,
-      payload.issuedAt,
-      payload.expiresAt,
-      nowIso(),
-      activatedBy,
-      payload.note ?? null
+      record.edition,
+      record.customerName,
+      record.licenseId,
+      options.activationCode ?? '',
+      record.issuedAt,
+      parseBusinessDate(record.endsOn).toISOString(),
+      seenAt,
+      options.activatedBy,
+      options.note ?? null,
+      record.startsOn,
+      record.endsOn,
+      signature,
+      signature,
+      seenAt,
+      seenAt,
+      seenAt,
+      signLastSeen(db, record.licenseId, seenAt)
     );
+  writeHistory(db, record, options.action, options.activatedBy, signature);
+  return signature;
 }
 
-function statusFromPayload(
-  payload: LicensePayload,
-  now = new Date(),
-  warningDays = WARNING_DAYS
+/** Re-signs the current period and clears a clock-rollback lock. */
+export function unlockLicense(
+  db: Database,
+  masterPassword: string,
+  activatedBy: string,
+  now: Date = new Date()
 ): LicenseStatus {
-  const remaining = daysUntil(payload.expiresAt, now);
-  let state: LicenseState = 'VALID';
-  if (Date.parse(payload.expiresAt) <= now.getTime()) state = 'EXPIRED';
-  else if (remaining <= warningDays) state = 'EXPIRING';
-  return {
-    state,
-    edition: payload.edition,
-    customerName: payload.customerName,
-    issuedAt: payload.issuedAt,
-    expiresAt: payload.expiresAt,
-    daysRemaining: remaining,
-    features: featuresForEdition(payload.edition),
-    productName: productNameForEdition(payload.edition),
-    message:
-      state === 'EXPIRED'
-        ? 'Your licence has expired. Renew with the vendor master password to continue.'
-        : undefined
-  };
-}
-
-/** Reads the stored licence and re-verifies its signature on every call. */
-export function getLicenseStatus(db: Database, now = new Date()): LicenseStatus {
+  checkMasterPassword(db, masterPassword, now, 'license.unlock');
   const row = readLicenseRow(db);
-  if (!row) {
-    return {
-      state: 'NONE',
-      edition: null,
-      customerName: null,
-      issuedAt: null,
-      expiresAt: null,
-      daysRemaining: null,
-      features: null,
-      productName: productNameForEdition(null),
-      message: 'Activate Infoflex with the vendor master password to get started.'
-    };
-  }
-  try {
-    const payload = verifyLicenseCode(row.activation_code, VENDOR_PUBLIC_KEY_SPKI_BASE64);
-    return statusFromPayload(payload, now, getAllSettings(db).licenseExpiryWarningDays);
-  } catch (error) {
-    return {
-      state: 'INVALID',
-      edition: null,
-      customerName: null,
-      issuedAt: null,
-      expiresAt: null,
-      daysRemaining: null,
-      features: null,
-      productName: productNameForEdition(null),
-      message:
-        error instanceof Error ? `Licence could not be verified: ${error.message}` : 'Licence invalid.'
-    };
-  }
-}
+  if (!row) throw new AppError('LICENSE_REQUIRED', 'There is no licence on this installation yet.');
 
-export function requireValidLicense(db: Database): LicenseStatus {
-  const status = getLicenseStatus(db);
-  if (status.state === 'NONE' || status.state === 'INVALID') {
-    throw new AppError('LICENSE_REQUIRED', status.message ?? 'Activate your Infoflex licence first.');
+  const record = recordFromRow(row);
+  if (!verifyPeriodSignature(db, record, row.period_hmac ?? row.hmac)) {
+    throw new AppError(
+      'LICENSE_LOCKED',
+      'The licence file was changed outside the app. Enter a new licence period to restore it.',
+      { reason: 'TAMPERED' }
+    );
   }
-  if (status.state === 'EXPIRED') {
-    throw new AppError('LICENSE_EXPIRED', status.message ?? 'Your licence has expired.');
-  }
-  return status;
+
+  const seenAt = now.toISOString();
+  db.handle
+    .prepare(
+      `UPDATE license_state
+          SET lock_reason = NULL, locked_at = NULL, last_seen_at = ?, last_seen_hmac = ?, renewed_at = ?
+        WHERE id = 1`
+    )
+    .run(seenAt, signLastSeen(db, record.licenseId, seenAt), seenAt);
+  writeHistory(
+    db,
+    record,
+    'UNLOCK',
+    activatedBy,
+    row.period_hmac ?? signPeriod(db, record)
+  );
+  audit(db, {
+    action: 'license.unlock',
+    entity: 'license',
+    entityId: record.licenseId,
+    username: activatedBy,
+    severity: 'SECURITY',
+    details: { startsOn: record.startsOn, endsOn: record.endsOn }
+  });
+  return computeLicenseStatus(db, now);
 }
 
 export interface ActivateOptions {
   masterPassword: string;
-  /** An existing signed activation code, or omit to issue one in vendor mode. */
+  /** Pre-signed vendor code (legacy path). */
   activationCode?: string;
   edition?: Edition;
+  /** Business dates, `YYYY-MM-DD`; end date exclusive. */
+  startsOn?: string;
+  endsOn?: string;
   customerName?: string;
+  /** Legacy inclusive expiry timestamp, mapped onto an exclusive end date. */
   expiresAt?: string;
   note?: string;
   activatedBy: string;
 }
 
 /**
- * Activates or renews the licence. Two paths, both gated by the vendor master
- * password:
- *   1. paste a licence code signed by the vendor tool (recommended), or
- *   2. vendor mode: sign a fresh licence in place from the details supplied.
+ * Activates a fresh installation or renews an existing licence.
+ *
+ * Every path is gated by the master password (rate limited) and writes the
+ * period plus its HMAC in one transaction. Renewals must move forward: a period
+ * that has already been used, or an end date that is not in the future, is
+ * refused. The store details are never touched here.
  */
-export function activateLicense(db: Database, options: ActivateOptions): LicenseStatus {
-  assertVendorPassword(options.masterPassword);
+export function activateLicense(
+  db: Database,
+  options: ActivateOptions,
+  now: Date = new Date()
+): LicenseStatus {
+  const before = readLicenseRow(db);
+  checkMasterPassword(db, options.masterPassword, now, before ? 'license.renew' : 'license.activate');
 
-  let code = options.activationCode?.trim() || '';
-  if (code) {
+  let edition: Edition;
+  let record: LicenseRecord;
+  let activationCode = '';
+
+  if (options.activationCode?.trim()) {
+    const code = options.activationCode.trim();
+    let payload: LicensePayload;
     try {
-      verifyLicenseCode(code, VENDOR_PUBLIC_KEY_SPKI_BASE64);
+      payload = verifyLicenseCode(code, VENDOR_PUBLIC_KEY_SPKI_BASE64);
     } catch (error) {
-      throw validation(
-        error instanceof Error ? error.message : 'That licence code could not be verified.'
-      );
+      throw validation(error instanceof Error ? error.message : 'That licence code could not be verified.');
     }
+    if (Date.parse(payload.expiresAt) <= now.getTime()) {
+      throw validation('That licence has already expired. Issue a new one to renew.');
+    }
+    edition = payload.edition;
+    record = recordFor(
+      edition,
+      localDate(new Date(payload.issuedAt)),
+      endDateFromExpiry(payload.expiresAt),
+      payload.customerName,
+      payload.issuedAt,
+      payload.licenseId
+    );
+    activationCode = code;
+    options.customerName = payload.customerName;
+    options.note = payload.note;
   } else {
-    if (!options.edition || !options.customerName || !options.expiresAt) {
-      throw validation('Choose an edition, customer name and expiry date to issue a licence.');
+    edition = (options.edition ?? before?.edition ?? '') as Edition;
+    if (!isValidEdition(edition)) throw validation('Choose a valid edition.');
+
+    let startsOn = options.startsOn;
+    let endsOn = options.endsOn;
+    if (!startsOn || !endsOn) {
+      // Legacy callers send only an expiry timestamp.
+      if (!options.expiresAt) throw validation('Choose the licence start and end dates.');
+      startsOn = localDate(now);
+      endsOn = endDateFromExpiry(options.expiresAt);
     }
-    const payload = buildLicensePayload({
-      edition: options.edition,
-      customerName: options.customerName,
-      expiresAt: options.expiresAt,
-      note: options.note
-    });
-    code = signLicensePayload(payload, options.masterPassword);
+    const period = validatePeriod({ startsOn, endsOn }, now);
+    record = recordFor(
+      edition,
+      period.startsOn,
+      period.endsOn,
+      (options.customerName ?? before?.customer_name ?? '').trim(),
+      now.toISOString(),
+      before?.license_id && before.edition === edition ? before.license_id : randomUUID()
+    );
   }
 
-  const payload = verifyLicenseCode(code, VENDOR_PUBLIC_KEY_SPKI_BASE64);
-  if (Date.parse(payload.expiresAt) <= Date.now()) {
-    throw validation('That licence has already expired. Issue a new one to renew.');
+  // Renewals may not replay a period that has already been issued. The one
+  // exception is re-signing the period that is already in the signed history
+  // while it is still running (an edition change, or repairing a tampered row) —
+  // an expired range can never be reused.
+  const lastSigned = readHistory(db, 1)[0];
+  const matchesSignedHistory =
+    Boolean(lastSigned) &&
+    lastSigned!.startsOn === record.startsOn &&
+    lastSigned!.endsOn === record.endsOn;
+  const historyStillRunning = matchesSignedHistory && localDate(now) < record.endsOn;
+  if (periodAlreadyUsed(db, record.startsOn, record.endsOn) && !historyStillRunning) {
+    throw validation('That licence period has already been used. Choose a new start or end date.');
   }
-  saveLicense(db, payload, code, options.activatedBy);
-  return getLicenseStatus(db);
+
+  const action: LicenseHistoryEntry['action'] = !before
+    ? 'ACTIVATE'
+    : before.edition !== record.edition
+      ? 'EDITION_CHANGE'
+      : 'RENEW';
+
+  db.transaction(() => {
+    persist(db, record, {
+      action,
+      activatedBy: options.activatedBy,
+      activationCode,
+      note: options.note ?? null
+    });
+    audit(db, {
+      action: action === 'ACTIVATE' ? 'license.activate' : action === 'RENEW' ? 'license.renew' : 'license.edition.change',
+      entity: 'license',
+      entityId: record.licenseId,
+      username: options.activatedBy,
+      severity: 'SECURITY',
+      details: {
+        edition: record.edition,
+        previousEdition: before?.edition ?? null,
+        startsOn: record.startsOn,
+        endsOn: record.endsOn,
+        previousEndsOn: before?.ends_on ?? null,
+        mode: activationCode ? 'activation-code' : 'vendor-setup'
+      }
+    });
+    if (before && before.edition !== record.edition) {
+      audit(db, {
+        action: 'license.edition.change',
+        entity: 'license',
+        entityId: record.licenseId,
+        username: options.activatedBy,
+        severity: 'SECURITY',
+        details: { from: before.edition, to: record.edition }
+      });
+    }
+  });
+
+  return computeLicenseStatus(db, now);
 }
+
+/** Legacy helper used by tests and the vendor tooling. */
+export function saveLicense(
+  db: Database,
+  payload: LicensePayload,
+  code: string,
+  activatedBy: string
+): void {
+  const record = recordFor(
+    payload.edition,
+    localDate(new Date(payload.issuedAt)),
+    endDateFromExpiry(payload.expiresAt),
+    payload.customerName,
+    payload.issuedAt,
+    payload.licenseId
+  );
+  db.transaction(() => {
+    persist(db, record, {
+      action: 'ACTIVATE',
+      activatedBy,
+      activationCode: code,
+      note: payload.note ?? null
+    });
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Reading the licence                                                 */
+/* ------------------------------------------------------------------ */
+
+/** Reads the stored licence, re-verifying its HMAC and the clock on every call. */
+export function getLicenseStatus(db: Database, now: Date = new Date()): LicenseStatus {
+  return evaluateLicense(db, now).status;
+}
+
+export function requireValidLicense(db: Database, now: Date = new Date()): LicenseStatus {
+  return requireUsableLicense(db, now);
+}
+
+export interface LicenseSummary {
+  status: LicenseStatus;
+  history: LicenseHistoryEntry[];
+  productName: string;
+  features: ReturnType<typeof featuresForEdition> | null;
+}
+
+export function licenseSummary(db: Database, now: Date = new Date(), historyLimit = 25): LicenseSummary {
+  const status = getLicenseStatus(db, now);
+  return {
+    status,
+    history: readHistory(db, historyLimit),
+    productName: status.productName || productNameForEdition(null) || UNLICENSED_PRODUCT_NAME,
+    features: status.features ? featuresForEdition(status.edition as Edition) : null
+  };
+}
+
+/** True when the stored licence record exists but its HMAC no longer matches. */
+export function licenseIsTampered(db: Database): boolean {
+  const row = readLicenseRow(db);
+  if (!row) return false;
+  return !verifyPeriodSignature(db, recordFromRow(row), row.period_hmac ?? row.hmac);
+}
+
+/** Exposed for the activation screen: is this a business date string? */
+export { isBusinessDate };
+
+export type { LicenseSetupInput };
+
+/** Editable fields on the activation screen — kept in one place for the UI. */
+export const LICENSE_EDITION_CHOICES: Array<{ value: Edition; label: string; product: string }> = [
+  { value: 'PHARMACY', label: 'Pharmacy', product: productNameForEdition('PHARMACY') },
+  { value: 'SUPERMARKET', label: 'Supermarket', product: productNameForEdition('SUPERMARKET') },
+  { value: 'BOTH', label: 'Pharmacy & Supermarket', product: productNameForEdition('BOTH') }
+];

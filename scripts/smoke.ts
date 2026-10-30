@@ -96,7 +96,15 @@ async function main() {
 
   const expiry = new Date(Date.now() + 365 * 86_400_000).toISOString();
   await check('activates PHARMACY edition with master password', async () => {
-    const status = await api<{ state: string; productName: string; edition: string }>('license.activate', {
+    const status = await api<{
+      state: string;
+      productName: string;
+      edition: string;
+      startsOn: string;
+      endsOn: string;
+      usable: boolean;
+      daysRemaining: number;
+    }>('license.activate', {
       masterPassword: MASTER,
       edition: 'PHARMACY',
       customerName: 'Grace Pharmacy Ikeja',
@@ -104,6 +112,19 @@ async function main() {
     });
     assert(status.state === 'VALID', `state ${status.state}`);
     assert(status.productName === 'Infoflex Pharm', 'wrong product name');
+    assert(status.usable === true, 'licence should be usable');
+    assert(/^\d{4}-\d{2}-\d{2}$/.test(status.startsOn), `start date ${status.startsOn}`);
+    assert(status.endsOn > status.startsOn, 'end date must be after the start date');
+    assert(status.daysRemaining > 300, `days remaining ${status.daysRemaining}`);
+  });
+
+  await check('refuses an end date of today (the app would lock immediately)', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    await expectError(
+      'license.activate',
+      { masterPassword: MASTER, edition: 'PHARMACY', startsOn: today, endsOn: today },
+      'VALIDATION'
+    );
   });
 
   await check('first-run setup requires a store name', async () => {
@@ -353,6 +374,26 @@ async function main() {
       filename: `smoke-${stamp}.html`
     });
     assert(saved.path.endsWith('.html'), 'export path');
+  });
+
+  await check('renewal with a new range keeps every record intact', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const end = new Date();
+    end.setFullYear(end.getFullYear() + 2);
+    const renewed = await api<{ state: string; endsOn: string }>('license.activate', {
+      masterPassword: MASTER,
+      edition: 'PHARMACY',
+      startsOn: today,
+      endsOn: end.toISOString().slice(0, 10)
+    });
+    assert(renewed.state === 'VALID', `renewed state ${renewed.state}`);
+    const products = await api<unknown[]>('products.list', {});
+    assert(Array.isArray(products) && products.length > 0, 'products disappeared after renewal');
+    const settings = await api<{ storeName: string }>('settings.read', {});
+    assert(settings.storeName === 'Grace Pharmacy', `store name became ${settings.storeName}`);
+    const history = await api<Array<{ action: string }>>('license.history', {});
+    assert(history.some((row) => row.action === 'ACTIVATE'), 'activation missing from history');
+    assert(history.some((row) => row.action === 'RENEW'), 'renewal missing from history');
   });
 
   await check('licence status reports expiry window', async () => {

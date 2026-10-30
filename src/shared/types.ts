@@ -100,18 +100,84 @@ export interface SessionInfo {
 /* Licensing                                                           */
 /* ------------------------------------------------------------------ */
 
-export type LicenseState = 'NONE' | 'VALID' | 'EXPIRING' | 'EXPIRED' | 'INVALID';
+/**
+ * Licence states. Everything except VALID / EXPIRING locks the app: NONE means
+ * the install has never been activated, NOT_STARTED means the period has not
+ * begun, EXPIRED means today is on or after the end date, TAMPERED means the
+ * stored record no longer matches its HMAC, CLOCK_ROLLBACK means the machine
+ * clock moved backwards.
+ */
+export type LicenseState =
+  | 'NONE'
+  | 'VALID'
+  | 'EXPIRING'
+  | 'EXPIRED'
+  | 'NOT_STARTED'
+  | 'TAMPERED'
+  | 'CLOCK_ROLLBACK'
+  | 'INVALID';
+
+export type LicenseLockReason = 'NONE' | 'EXPIRED' | 'NOT_STARTED' | 'TAMPERED' | 'CLOCK_ROLLBACK';
+
+/** Business dates are local `YYYY-MM-DD`; the end date is exclusive. */
+export interface LicensePeriod {
+  startsOn: string;
+  endsOn: string;
+}
 
 export interface LicenseStatus {
   state: LicenseState;
   edition: Edition | null;
   customerName: string | null;
   issuedAt: string | null;
+  /** ISO timestamp of the last valid instant (endsOn at 00:00 local). */
   expiresAt: string | null;
+  startsOn: string | null;
+  /** Exclusive: the app locks at 00:00 on this date. */
+  endsOn: string | null;
   daysRemaining: number | null;
   features: FeatureFlags | null;
   productName: string;
   message?: string;
+  /** True only for VALID / EXPIRING — every other state blocks the app. */
+  usable: boolean;
+  lockReason: LicenseLockReason | null;
+  /** Inside the last ten minutes before the period ends. */
+  endingSoon: boolean;
+  /** Admin banner threshold: 30, 14, 7 or 1 days before expiry. */
+  warning: { level: 30 | 14 | 7 | 1; daysRemaining: number } | null;
+  /** Main-process clock when the status was computed (renderer skew guard). */
+  serverTime: string;
+}
+
+export interface LicenseHistoryEntry {
+  id: number;
+  licenseId: string;
+  edition: Edition;
+  customerName: string;
+  startsOn: string;
+  endsOn: string;
+  action: 'ACTIVATE' | 'RENEW' | 'EDITION_CHANGE' | 'UNLOCK';
+  createdAt: string;
+  createdBy: string;
+}
+
+/** What the activation / renewal screen sends. */
+export interface LicenseSetupInput {
+  masterPassword: string;
+  edition?: Edition;
+  startsOn?: string;
+  endsOn?: string;
+  customerName?: string;
+  activationCode?: string;
+  note?: string;
+}
+
+export interface MasterPasswordResult {
+  ok: true;
+  failures: number;
+  /** Seconds until the next attempt is accepted (0 when not throttled). */
+  retryAfterSeconds: number;
 }
 
 export interface LicensePayload {
