@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import App from '../src/renderer/src/App';
 import { AppProvider } from '../src/renderer/src/state';
 import type { AppState, FeatureFlags, LicenseStatus } from '../src/shared/types';
+import { availableNav } from '../src/renderer/src/components/Layout';
 
 const featureFlags = (over: Partial<FeatureFlags> = {}): FeatureFlags => ({
   edition: 'PHARMACY',
@@ -34,9 +35,17 @@ function appState(over: Partial<AppState> = {}): AppState {
     productName: 'Infoflex Pharm',
     features: featureFlags(),
     license: license(),
-    setup: { licensed: true, storeConfigured: true, adminConfigured: true, setupRequired: false },
+    setup: {
+      licensed: true,
+      storeConfigured: true,
+      adminConfigured: true,
+      setupRequired: false,
+      storeNameLabel: 'Pharmacy name'
+    },
     session: null,
     version: 'test',
+    storeName: 'Grace Pharmacy Ikeja',
+    idleTimeoutMinutes: 15,
     ...over
   };
 }
@@ -59,6 +68,11 @@ function mockApi(state: AppState) {
   });
   vi.stubGlobal('fetch', handler);
   return handler;
+}
+
+function setValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, value);
 }
 
 let container: HTMLDivElement;
@@ -101,7 +115,13 @@ describe('renderer boot flow', () => {
       appState({
         productName: 'Infoflex',
         license: license({ state: 'NONE', edition: null, features: null, productName: 'Infoflex' }),
-        setup: { licensed: false, storeConfigured: false, adminConfigured: false, setupRequired: false }
+        setup: {
+          licensed: false,
+          storeConfigured: false,
+          adminConfigured: false,
+          setupRequired: false,
+          storeNameLabel: 'Pharmacy name'
+        }
       })
     );
     expect(el.textContent).toContain('Activate Infoflex');
@@ -112,11 +132,17 @@ describe('renderer boot flow', () => {
   it('shows first-run setup after activation', async () => {
     const el = await renderApp(
       appState({
-        setup: { licensed: true, storeConfigured: false, adminConfigured: false, setupRequired: true }
+        setup: {
+          licensed: true,
+          storeConfigured: false,
+          adminConfigured: false,
+          setupRequired: true,
+          storeNameLabel: 'Pharmacy name'
+        }
       })
     );
     expect(el.textContent).toContain('Welcome to Infoflex Pharm');
-    expect(el.textContent).toContain('Store name (required)');
+    expect(el.textContent).toContain('Pharmacy name (required)');
   });
 
   it('shows the branded login page when the store is configured', async () => {
@@ -200,6 +226,56 @@ describe('renderer boot flow', () => {
     expect(el.textContent).toContain('Cashier');
   });
 
+
+  it('toggles password visibility and shows the edition, store name and version', async () => {
+    const el = await renderApp(appState());
+
+    const toggle = el.querySelector('.password-toggle') as HTMLButtonElement;
+    const passwordInput = el.querySelector('input[autocomplete="current-password"]') as HTMLInputElement;
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(passwordInput.getAttribute('type')).toBe('password');
+
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect((el.querySelector('.password-toggle') as HTMLButtonElement).getAttribute('aria-pressed')).toBe('true');
+    expect((el.querySelector('input[autocomplete="current-password"]') as HTMLInputElement).getAttribute('type')).toBe(
+      'text'
+    );
+
+    expect(el.textContent).toContain('Pharmacy edition');
+    expect(el.querySelector('[data-testid="login-store-name"]')?.textContent).toBe('Grace Pharmacy Ikeja');
+    expect(el.textContent).toContain('Infoflex vtest');
+    expect(el.textContent).toContain('Works offline');
+    expect(el.textContent).not.toContain('Forgot password');
+  });
+
+  it('previews the store name on a receipt as it is typed during setup', async () => {
+    const el = await renderApp(
+      appState({
+        setup: {
+          licensed: true,
+          storeConfigured: false,
+          adminConfigured: false,
+          setupRequired: true,
+          storeNameLabel: 'Supermarket name'
+        },
+        features: featureFlags({ edition: 'SUPERMARKET', pharmacy: false, supermarket: true })
+      })
+    );
+    expect(el.textContent).toContain('Supermarket name (required)');
+    expect(el.textContent).toContain('Administrator account');
+    expect(el.textContent).toContain('Your supermarket name');
+
+    const input = el.querySelector('[data-testid="setup-store-name"]') as HTMLInputElement;
+    setValue(input, 'Mega Mart Lekki');
+    await act(async () => {
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(el.querySelector('[aria-label="Receipt preview"]')?.textContent).toContain('Mega Mart Lekki');
+  });
+
   it('forces a password change and hides the app chrome', async () => {
     const el = await renderApp(
       appState({
@@ -217,5 +293,72 @@ describe('renderer boot flow', () => {
     );
     expect(el.textContent).toContain('Set a new password');
     expect(el.textContent).not.toContain('Point of Sale');
+  });
+});
+
+describe('sidebar gating by role and edition', () => {
+  const keys = (permissions: string[], features: Record<string, boolean>) =>
+    availableNav(permissions, features).map((item) => item.key);
+
+  it('gives pharmacy admins batches but not supermarket modules', () => {
+    const nav = keys(
+      [
+        'pos.sell',
+        'wholesale.sell',
+        'products.view',
+        'products.manage',
+        'prices.set',
+        'stock.receive',
+        'stock.adjust',
+        'returns.create',
+        'reports.view.own',
+        'reports.view.all',
+        'users.manage',
+        'settings.manage',
+        'backup.manage',
+        'audit.view',
+        'license.manage'
+      ],
+      { pharmacy: true, supermarket: false, wholesale: true, prescriptions: true }
+    );
+    expect(nav).toContain('batches');
+    expect(nav).not.toContain('departments');
+    expect(nav).not.toContain('promotions');
+    expect(nav).not.toContain('loyalty');
+    expect(nav).not.toContain('shifts');
+    expect(nav).toEqual(expect.arrayContaining(['dashboard', 'pos', 'products', 'stock', 'returns', 'reports']));
+  });
+
+  it('gives supermarket admins departments, promotions, loyalty and shifts but no batches', () => {
+    const nav = keys(
+      [
+        'pos.sell',
+        'products.view',
+        'stock.receive',
+        'reports.view.own',
+        'users.manage',
+        'settings.manage',
+        'audit.view'
+      ],
+      { pharmacy: false, supermarket: true, wholesale: true, prescriptions: false }
+    );
+    expect(nav).toEqual(expect.arrayContaining(['departments', 'promotions', 'loyalty', 'shifts']));
+    expect(nav).not.toContain('batches');
+    // Administration stays admin-only via permission gates.
+    expect(nav).toContain('users');
+    expect(nav).toContain('settings');
+  });
+
+  it('keeps administration out of a cashier sidebar', () => {
+    const nav = keys(['pos.sell', 'sales.view.own', 'returns.create', 'products.view', 'reports.view.own'], {
+      pharmacy: true,
+      supermarket: false,
+      wholesale: false,
+      prescriptions: true
+    });
+    expect(nav).toEqual(expect.arrayContaining(['pos', 'returns', 'products', 'reports']));
+    for (const blocked of ['users', 'settings', 'audit', 'backup', 'license', 'wholesale']) {
+      expect(nav).not.toContain(blocked);
+    }
   });
 });

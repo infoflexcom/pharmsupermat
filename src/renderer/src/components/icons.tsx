@@ -20,7 +20,14 @@ export type IconName =
   | 'print'
   | 'check'
   | 'trash'
-  | 'shield';
+  | 'shield'
+  | 'customers'
+  | 'stock'
+  | 'departments'
+  | 'promotions'
+  | 'loyalty'
+  | 'shifts'
+  | 'batches';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   dashboard: (
@@ -61,6 +68,50 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M4 7l8-4 8 4v10l-8 4-8-4V7z" />
       <path d="M4 7l8 4 8-4M12 11v10" />
+    </>
+  ),
+  customers: (
+    <>
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M3.5 20c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5" strokeLinecap="round" />
+      <path d="M16 5.6a3 3 0 0 1 0 5.8M17.5 14.9c1.7.6 3 2.3 3 4.4" strokeLinecap="round" />
+    </>
+  ),
+  stock: (
+    <>
+      <path d="M3 8.5 12 4l9 4.5v7L12 20l-9-4.5v-7z" />
+      <path d="M3 8.5 12 13l9-4.5M12 13v7" />
+    </>
+  ),
+  departments: (
+    <>
+      <rect x="3" y="3" width="7" height="7" rx="1.4" />
+      <rect x="14" y="3" width="7" height="7" rx="1.4" />
+      <rect x="3" y="14" width="7" height="7" rx="1.4" />
+      <path d="M14 17.5h7M17.5 14v7" strokeLinecap="round" />
+    </>
+  ),
+  promotions: (
+    <>
+      <path d="M20.5 12.5 12 21l-9-9V3h9l8.5 8.5a0.7 0.7 0 0 1 0 1z" />
+      <circle cx="7.5" cy="7.5" r="1.4" />
+    </>
+  ),
+  loyalty: (
+    <>
+      <path d="M12 3.6l2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9L3.5 9.8l5.9-.9z" />
+    </>
+  ),
+  shifts: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7v5.3l3.4 2" strokeLinecap="round" />
+    </>
+  ),
+  batches: (
+    <>
+      <path d="M4 7h16v13H4z" />
+      <path d="M4 7l3-3h10l3 3M9 12h6M9 16h6" strokeLinecap="round" />
     </>
   ),
   inventory: (

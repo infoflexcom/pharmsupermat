@@ -76,7 +76,7 @@ describe('database schema and migrations', () => {
     const db = new Database(file);
     db.open();
     try {
-      expect(db.handle.pragma('user_version', { simple: true })).toBe(2);
+      expect(db.handle.pragma('user_version', { simple: true })).toBe(MIGRATIONS.length);
       const product = db.handle
         .prepare('SELECT sku, category_id, requires_prescription FROM products WHERE sku = ?')
         .get('SKU-1') as { sku: string; category_id: number; requires_prescription: number };
@@ -100,7 +100,7 @@ describe('database schema and migrations', () => {
 
       // Re-running is a no-op, not an error.
       migrate(db.handle);
-      expect(db.handle.pragma('user_version', { simple: true })).toBe(2);
+      expect(db.handle.pragma('user_version', { simple: true })).toBe(MIGRATIONS.length);
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });

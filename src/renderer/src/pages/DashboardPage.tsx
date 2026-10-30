@@ -104,7 +104,7 @@ export default function DashboardPage({ onNavigate }: { onNavigate: (view: ViewK
                   ) : r.voidRequestedAt ? (
                     <Badge tone="warn">Void pending</Badge>
                   ) : (
-                    <Badge tone="ok">Paid</Badge>
+                    <Badge tone="success">Paid</Badge>
                   )
               },
               { key: 'total', label: 'Total', align: 'right', render: (r) => <Money value={r.total} /> }

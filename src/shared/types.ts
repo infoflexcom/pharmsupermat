@@ -51,6 +51,10 @@ export interface AppState {
   setup: SetupStatus;
   session: SessionInfo | null;
   version: string;
+  /** Customer's store name — shown on the login screen and in the header. */
+  storeName: string | null;
+  /** Minutes of inactivity before the main process ends the session. */
+  idleTimeoutMinutes: number;
 }
 
 export interface SetupStatus {
@@ -58,6 +62,27 @@ export interface SetupStatus {
   storeConfigured: boolean;
   adminConfigured: boolean;
   setupRequired: boolean;
+  /** Label for the store-name field, worded for the active edition. */
+  storeNameLabel: string;
+}
+
+/** Everything the first-run setup screen sends, saved in one transaction. */
+export interface CompleteSetupInput {
+  storeName: string;
+  storeAddress?: string;
+  storePhone?: string;
+  storeEmail?: string;
+  storeLicenceNo?: string;
+  storeVatNo?: string;
+  /** Data URL of the store's own logo (optional, <= 200 KB). */
+  storeLogo?: string | null;
+  receiptFooter?: string;
+  thankYouNote?: string;
+  idleTimeoutMinutes?: number;
+  adminUsername: string;
+  adminFullName: string;
+  adminEmail?: string;
+  adminPassword: string;
 }
 
 export interface SessionInfo {
@@ -107,7 +132,15 @@ export interface StoreProfile {
   storeName: string;
   storeAddress: string;
   storePhone: string;
+  /** Pharmacy: PCN/NAFDAC number. Supermarket: business registration. Optional. */
+  storeLicenceNo: string;
+  storeVatNo: string;
+  storeEmail: string;
+  /** Data URL of the shop's own logo, printed on its documents. Empty when none. */
+  storeLogo: string;
   receiptFooter: string;
+  /** Thank-you line printed at the foot of a receipt. */
+  thankYouNote: string;
   returnLimit: Money;
   returnWindowDays: number;
   lowStockAlerts: boolean;
@@ -115,6 +148,8 @@ export interface StoreProfile {
 
 export interface SettingsPayload extends StoreProfile {
   licenseExpiryWarningDays: number;
+  /** Auto sign-out after this many minutes without activity (1-720). */
+  idleTimeoutMinutes: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -365,6 +400,12 @@ export interface UserAccount {
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;
+  email: string | null;
+  /** Consecutive failed sign-ins since the last success or unlock. */
+  failedAttempts: number;
+  /** Set when the account is locked; the admin unlocks from Users. */
+  lockedUntil: string | null;
+  isLocked: boolean;
 }
 
 export interface AuditEntry {

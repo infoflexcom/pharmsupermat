@@ -82,14 +82,26 @@ export function Kpi({ label, value, hint }: { label: string; value: string; hint
   );
 }
 
+/** Alert styles accept the badge spellings too, so both components can share tones. */
+export type AlertTone = 'info' | 'success' | 'warn' | 'error' | 'ok' | 'gold' | 'danger';
+const ALERT_TONE: Record<AlertTone, 'info' | 'success' | 'warn' | 'error'> = {
+  info: 'info',
+  success: 'success',
+  warn: 'warn',
+  error: 'error',
+  ok: 'success',
+  gold: 'info',
+  danger: 'error'
+};
+
 export function Alert({
   tone = 'info',
   children
 }: {
-  tone?: 'info' | 'error' | 'warn' | 'success';
+  tone?: AlertTone;
   children: React.ReactNode;
 }) {
-  return <div className={`alert ${tone}`}>{children}</div>;
+  return <div className={`alert ${ALERT_TONE[tone] ?? 'info'}`}>{children}</div>;
 }
 
 export function EmptyState({ children }: { children: React.ReactNode }) {
@@ -211,14 +223,26 @@ export function Modal({
 /* ------------------------------------------------------------------ */
 /* Badge + table                                                      */
 /* ------------------------------------------------------------------ */
+export type BadgeTone = 'ok' | 'warn' | 'danger' | 'neutral' | 'gold' | 'info' | 'success' | 'error';
+const BADGE_TONE: Record<BadgeTone, 'ok' | 'warn' | 'danger' | 'neutral' | 'gold'> = {
+  ok: 'ok',
+  warn: 'warn',
+  danger: 'danger',
+  neutral: 'neutral',
+  gold: 'gold',
+  info: 'gold',
+  success: 'ok',
+  error: 'danger'
+};
+
 export function Badge({
   tone = 'neutral',
   children
 }: {
-  tone?: 'ok' | 'warn' | 'danger' | 'neutral' | 'gold';
+  tone?: BadgeTone;
   children: React.ReactNode;
 }) {
-  return <span className={`badge ${tone}`}>{children}</span>;
+  return <span className={`badge ${BADGE_TONE[tone] ?? 'neutral'}`}>{children}</span>;
 }
 
 export interface Column<T> {

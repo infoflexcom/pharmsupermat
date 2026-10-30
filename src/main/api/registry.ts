@@ -11,7 +11,7 @@ import { getAppState, completeSetup, getSetupStatus } from '../../services/app';
 import { authenticate, changePassword } from '../../services/auth';
 import { audit, listAudit } from '../../services/audit';
 import { getAllSettings, updateSettings } from '../../services/settings';
-import type { ProductInput } from '../../shared/types';
+import type { CompleteSetupInput, ProductInput } from '../../shared/types';
 import {
   createProduct,
   getProduct,
@@ -58,9 +58,11 @@ import {
   createUser,
   listUsers,
   resetUserPassword,
+  unlockUser,
   updateUser
 } from '../../services/users';
 import { createBackup, listBackups, restoreBackup } from '../../services/backup';
+import { toUserAccount } from '../../services/auth';
 import { buildCreditNoteDocument, buildSaleDocument } from '../../services/documents';
 import { createSession, dropSession, refreshSessionPermissions } from '../../services/session';
 import { verifyVendorPassword } from '../../license/license';
@@ -217,15 +219,7 @@ export const CORE_HANDLERS: Handler[] = [
     channel: 'setup.complete',
     auth: false,
     handler: (args) => {
-      const payload = payloadOf<{
-        storeName: string;
-        storeAddress: string;
-        storePhone: string;
-        receiptFooter?: string;
-        adminUsername: string;
-        adminFullName: string;
-        adminPassword: string;
-      }>(args);
+      const payload = payloadOf<CompleteSetupInput>(args);
       return completeSetup(args.ctx.db, payload, args.license);
     }
   },
@@ -251,14 +245,6 @@ export const CORE_HANDLERS: Handler[] = [
         },
         edition
       );
-      audit(args.ctx.db, {
-        action: 'auth.login',
-        entity: 'user',
-        entityId: account.id,
-        userId: account.id,
-        username: account.username,
-        severity: 'SECURITY'
-      });
       return {
         token: session.token,
         userId: session.userId,
@@ -810,6 +796,18 @@ export const CORE_HANDLERS: Handler[] = [
       const session = requireSession(args);
       resetUserPassword(args.ctx.db, payloadOf<{ id: number; newPassword: string }>(args), actor(session));
       return { ok: true };
+    }
+  },
+
+  {
+    // Administrator-only: clears a lock caused by five failed sign-ins.
+    channel: 'users.unlock',
+    permission: 'users.manage',
+    handler: (args) => {
+      const session = requireSession(args);
+      const { id } = payloadOf<{ id: number }>(args);
+      const row = unlockUser(args.ctx.db, id, actor(session));
+      return toUserAccount(row);
     }
   },
 

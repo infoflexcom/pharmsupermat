@@ -326,3 +326,70 @@ shop that buys the combined edition keeps one ledger.
   and variants are the natural next step — the data layer and guards are in
   place behind them.
 - The Windows NSIS installer still has to be built on Windows (see §25).
+
+## 28. Phase 3 — first-run setup, accounts and the front door
+
+**One setup screen, one transaction.** `setup.complete` writes the administrator
+account and the store profile inside a single `db.transaction()` — a bad
+password, a blank store name or a rejected logo rolls both halves back, so a
+half-configured installation is impossible. Setup is only offered after licence
+activation (`setup.status.licensed`) and only while `users` is empty; the call
+returns `CONFLICT` once an administrator exists. The store-name label comes from
+the licence edition (`Pharmacy name` / `Supermarket name` / `Business name`) and
+is echoed to the renderer as `SetupStatus.storeNameLabel`.
+
+**Passwords.** bcrypt (cost 10, overridable with `INFOFLEX_BCRYPT_ROUNDS`,
+clamped 8–14). The rules are ≥8 characters, ≤200 bytes, at least one letter and
+one digit, no leading/trailing spaces. Legacy `scrypt$…` hashes from phase 1/2
+still verify and are transparently upgraded to bcrypt on the next successful
+sign-in (`passwordNeedsRehash` + `password_algo` column).
+
+**Lockout lives in the database, not in memory.** Five consecutive failures set
+`locked_until = 9999-12-31…` and `locked_reason = 'failed_sign_ins'` on the
+account, so restarting the app does not grant five more guesses. A locked
+account is refused with `FORBIDDEN` even when the password is correct. Only an
+administrator (`users.manage`) can clear it via `users.unlock`, which resets the
+counter and writes a `user.unlock` audit entry. Unknown usernames return the
+same `Incorrect username or password.` message as a wrong password and are
+audited as `auth.login.failed` with `reason: 'unknown_username'`.
+
+**Idle sign-out is enforced twice.** The main process stamps `lastSeen` on every
+authenticated call and drops a session after `idleTimeoutMinutes` (default 15,
+configurable 1–720 in Settings). The renderer runs the same timer (checking every
+5 s against mouse/keyboard/touch/scroll activity) and calls `auth.logout`, so the
+UI returns to the login card instead of showing a dead shell. Neither layer is
+trusted on its own.
+
+**Roles.** Admin, Supervisor (supermarket only — creating one on a pharmacy
+licence is `EDITION_RESTRICTED`) and Cashier. Supervisors approve voids, refunds
+and price overrides but cannot create users, set prices, add goods or change
+settings. New accounts always start with `must_change_password = 1`; the main
+process rejects every other channel until `auth.changePassword` succeeds. There
+is no self sign-up, no public user list and no password-reset-by-email path.
+
+**Branding on the login page.** `src/renderer/src/assets/login-bg.jpg` is the
+blurred navy logo backdrop, cropped from `logo-source.png`; the renderer never
+loads a file from disk at runtime, so the packaged app has no missing-asset path.
+The customer's store name is shown in small type under the card only once setup
+is complete, and the footer prints the app version from `app.state`.
+
+**Store logo on documents.** The logo is stored as a `data:image/...;base64,`
+URL (≤200 KB, validated on the way in *and* again in `documents.ts` before it is
+embedded). `storeHeader()` renders it above the store name on receipts, invoices,
+credit notes and reports. The same header is used everywhere, so a printed
+document always matches the shop's own branding.
+
+**Sidebar grouping and tone aliases.** Navigation is grouped Sales / Catalogue /
+Stock / Administration, filtered by permission *and* licence feature in one place
+(`availableNav`), while the main process keeps the authoritative gate. `Badge`
+(`ok|warn|danger|neutral|gold`) and `Alert` (`info|success|warn|error`) keep their
+own vocabularies; `ui.tsx` maps the aliases so a page can pass either spelling
+and neither component silently loses its colour.
+
+## 29. Known limitations after phase 3
+
+- `ActivationPage`, `DashboardPage`, `PosPage`, `ProductsPage`, `InventoryPage`,
+  `ReturnsPage`, `ReportsPage`, `SalesPage`, `AuditPage`, `BackupPage` and
+  `LicensePage` are still the phase-1 screens; they work against the same typed
+  IPC layer but have not been visually re-skinned to the phase-3 design.
+- The Windows NSIS installer still has to be built on Windows (see §25).

@@ -3,6 +3,7 @@ import type { Database } from '../db';
 import type { Edition, LicenseStatus, Role } from '../shared/types';
 import { permissionsForRole, type Permission } from '../shared/permissions';
 import { findUserById } from './auth';
+import { idleTimeoutMs } from './settings';
 import { getLicenseStatus } from '../license/license';
 
 export interface Session {
@@ -29,7 +30,17 @@ export interface ApiContext {
   print?: (payload: { html: string; title: string }) => Promise<{ printed: boolean; message: string }>;
 }
 
-export const SESSION_IDLE_MS = 12 * 60 * 60 * 1000; // 12 hours
+/** Fallback when settings cannot be read (e.g. a brand-new database). */
+export const SESSION_IDLE_MS = 15 * 60 * 1000;
+
+/** Inactivity limit for a session, configured in Settings (1-720 minutes). */
+export function sessionIdleMs(db: Database): number {
+  try {
+    return idleTimeoutMs(db);
+  } catch {
+    return SESSION_IDLE_MS;
+  }
+}
 
 export function createContext(options: {
   db: Database;
@@ -85,7 +96,9 @@ export function resolveSession(ctx: ApiContext, token: unknown): Session | null 
   if (typeof token !== 'string' || !token) return null;
   const session = ctx.sessions.get(token);
   if (!session) return null;
-  if (Date.now() - session.lastSeen > SESSION_IDLE_MS) {
+  // Idle expiry is enforced here, in the main process, so a renderer that
+  // ignores its own timer still cannot keep a session alive.
+  if (Date.now() - session.lastSeen > sessionIdleMs(ctx.db)) {
     ctx.sessions.delete(token);
     return null;
   }

@@ -4,25 +4,28 @@ import type { Edition, Role, UserAccount } from '../shared/types';
 import { AppError, conflict, notFound, validation } from '../shared/errors';
 import { audit } from './audit';
 import { availableRoles } from '../shared/editions';
-import { countAdmins, hashPassword, passwordProblem, toUserAccount } from './auth';
+import {
+  countAdmins,
+  findUserById,
+  hashPassword,
+  passwordProblem,
+  toUserAccount,
+  type UserRow
+} from './auth';
 import type { Actor } from './stock';
-
-interface UserRow {
-  id: number;
-  username: string;
-  full_name: string;
-  role: Role;
-  password_hash: string;
-  active: number;
-  must_change_password: number;
-  last_login_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
 
 export function listUsers(db: Database): UserAccount[] {
   const rows = db.handle.prepare('SELECT * FROM users ORDER BY role, full_name').all() as UserRow[];
   return rows.map(toUserAccount);
+}
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function checkEmail(email: string | null | undefined): string | null {
+  const value = email?.trim() ?? '';
+  if (!value) return null;
+  if (!EMAIL.test(value)) throw validation('That email address looks invalid.');
+  return value;
 }
 
 export interface CreateUserInput {
@@ -30,6 +33,7 @@ export interface CreateUserInput {
   fullName: string;
   role: Role;
   password: string;
+  email?: string | null;
 }
 
 export function createUser(
@@ -50,6 +54,7 @@ export function createUser(
       `${input.role} accounts are not available on the ${edition.toLowerCase()} edition.`
     );
   }
+  const email = checkEmail(input.email);
   return db.transaction(() => {
     const existing = db.handle
       .prepare('SELECT id FROM users WHERE username = ? COLLATE NOCASE')
@@ -58,14 +63,15 @@ export function createUser(
     const now = nowIso();
     const result = db.handle
       .prepare(
-        `INSERT INTO users (username, full_name, role, password_hash, active, must_change_password, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 1, 1, ?, ?)`
+        `INSERT INTO users (username, full_name, role, password_hash, password_algo, active, must_change_password, email, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'bcrypt', 1, 1, ?, ?, ?)`
       )
       .run(
         input.username.trim(),
         input.fullName.trim(),
         input.role,
         hashPassword(input.password),
+        email,
         now,
         now
       );
@@ -79,18 +85,17 @@ export function createUser(
       severity: 'SECURITY',
       details: { username: input.username.trim(), role: input.role }
     });
-    const row = db.handle.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow;
-    return toUserAccount(row);
+    return toUserAccount(findUserById(db, id)!);
   });
 }
 
 export function updateUser(
   db: Database,
-  input: { id: number; fullName?: string; role?: Role; active?: boolean },
+  input: { id: number; fullName?: string; role?: Role; active?: boolean; email?: string | null },
   actor: Actor,
   edition: Edition
 ): UserAccount {
-  const row = db.handle.prepare('SELECT * FROM users WHERE id = ?').get(input.id) as UserRow | undefined;
+  const row = findUserById(db, input.id);
   if (!row) throw notFound('User');
   const nextRole = input.role ?? row.role;
   if (input.role && !availableRoles(edition).includes(nextRole)) {
@@ -103,13 +108,18 @@ export function updateUser(
   if (row.role === 'ADMIN' && (!nextActive || nextRole !== 'ADMIN') && countAdmins(db) <= 1) {
     throw conflict('You cannot remove or demote the last active administrator.');
   }
+  const email = input.email === undefined ? row.email : checkEmail(input.email);
   return db.transaction(() => {
     db.handle
-      .prepare('UPDATE users SET full_name = ?, role = ?, active = ?, updated_at = ? WHERE id = ?')
+      .prepare(
+        `UPDATE users SET full_name = ?, role = ?, active = ?, email = ?, updated_at = ?
+          WHERE id = ?`
+      )
       .run(
         input.fullName?.trim() || row.full_name,
         nextRole,
         nextActive ? 1 : 0,
+        email,
         nowIso(),
         input.id
       );
@@ -126,8 +136,7 @@ export function updateUser(
         active: { from: !!row.active, to: nextActive }
       }
     });
-    const updated = db.handle.prepare('SELECT * FROM users WHERE id = ?').get(input.id) as UserRow;
-    return toUserAccount(updated);
+    return toUserAccount(findUserById(db, input.id)!);
   });
 }
 
@@ -136,14 +145,16 @@ export function resetUserPassword(
   input: { id: number; newPassword: string },
   actor: Actor
 ): void {
-  const row = db.handle.prepare('SELECT * FROM users WHERE id = ?').get(input.id) as UserRow | undefined;
+  const row = findUserById(db, input.id);
   if (!row) throw notFound('User');
   const problem = passwordProblem(input.newPassword);
   if (problem) throw validation(problem);
   db.transaction(() => {
     db.handle
       .prepare(
-        'UPDATE users SET password_hash = ?, must_change_password = 1, updated_at = ? WHERE id = ?'
+        `UPDATE users SET password_hash = ?, password_algo = 'bcrypt', must_change_password = 1,
+           failed_attempts = 0, locked_until = NULL, locked_reason = NULL, updated_at = ?
+         WHERE id = ?`
       )
       .run(hashPassword(input.newPassword), nowIso(), input.id);
     audit(db, {
@@ -161,7 +172,7 @@ export function resetUserPassword(
 /** Bootstraps the very first administrator during first-run setup. */
 export function createFirstAdmin(
   db: Database,
-  input: { username: string; fullName: string; password: string }
+  input: { username: string; fullName: string; password: string; email?: string | null }
 ): UserAccount {
   const adminCount = countAdmins(db, false);
   if (adminCount > 0) throw new AppError('CONFLICT', 'An administrator already exists.');
@@ -171,14 +182,15 @@ export function createFirstAdmin(
   if (!input.fullName?.trim()) throw validation('Full name is required.');
   const problem = passwordProblem(input.password);
   if (problem) throw validation(problem);
+  const email = checkEmail(input.email);
   return db.transaction(() => {
     const now = nowIso();
     const result = db.handle
       .prepare(
-        `INSERT INTO users (username, full_name, role, password_hash, active, must_change_password, created_at, updated_at)
-         VALUES (?, ?, 'ADMIN', ?, 1, 0, ?, ?)`
+        `INSERT INTO users (username, full_name, role, password_hash, password_algo, active, must_change_password, email, created_at, updated_at)
+         VALUES (?, ?, 'ADMIN', ?, 'bcrypt', 1, 0, ?, ?, ?)`
       )
-      .run(input.username.trim(), input.fullName.trim(), hashPassword(input.password), now, now);
+      .run(input.username.trim(), input.fullName.trim(), hashPassword(input.password), email, now, now);
     const id = Number(result.lastInsertRowid);
     audit(db, {
       action: 'user.bootstrap',
@@ -188,7 +200,8 @@ export function createFirstAdmin(
       severity: 'SECURITY',
       details: { username: input.username.trim() }
     });
-    const row = db.handle.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow;
-    return toUserAccount(row);
+    return toUserAccount(findUserById(db, id)!);
   });
 }
+
+export { unlockUser } from './auth';

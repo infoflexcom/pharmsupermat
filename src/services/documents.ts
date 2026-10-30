@@ -15,6 +15,7 @@ const BASE_CSS = `
   .store { text-align: center; border-bottom: 2px solid var(--navy); padding-bottom: 10px; margin-bottom: 14px; }
   .store h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: .4px; color: var(--navy); text-transform: uppercase; }
   .store .addr { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .store .store-logo { max-height: 46px; max-width: 150px; object-fit: contain; margin-bottom: 6px; }
   .store .tagline { font-size: 10px; color: var(--gold); letter-spacing: 1.4px; text-transform: uppercase; margin-top: 4px; }
   .doc-title { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin: 12px 0 8px; }
   .doc-title h2 { margin: 0; font-size: 15px; letter-spacing: 1px; text-transform: uppercase; color: var(--navy); }
@@ -56,9 +57,11 @@ function formatDate(iso: string): string {
   });
 }
 
-function storeHeader(storeName: string, address: string, phone: string): string {
+function storeHeader(storeName: string, address: string, phone: string, logo?: string): string {
+  const safeLogo = typeof logo === 'string' && /^data:image\/(png|jpeg|jpg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(logo);
   return `
     <div class="store">
+      ${safeLogo ? `<img class="store-logo" src="${logo}" alt="" />` : ''}
       <h1>${escapeHtml(storeName)}</h1>
       <div class="addr">
         ${address ? escapeHtml(address) : ''}${address && phone ? ' &middot; ' : ''}${phone ? `Tel: ${escapeHtml(phone)}` : ''}
@@ -105,7 +108,7 @@ export function buildSaleDocument(sale: Sale, store?: StoreProfile, productName 
         : '';
 
   const body = `
-    ${storeHeader(sale.storeName, sale.storeAddress, sale.storePhone)}
+    ${storeHeader(sale.storeName, sale.storeAddress, sale.storePhone, store?.storeLogo)}
     <div class="doc-title">
       <h2>${title} ${statusBadge}</h2>
       <div class="meta">
@@ -138,7 +141,8 @@ export function buildSaleDocument(sale: Sale, store?: StoreProfile, productName 
     </div>
     ${sale.status === 'VOIDED' ? `<div class="meta" style="margin-top:14px"><strong>VOIDED:</strong> ${escapeHtml(sale.voidReason ?? '')} — ${escapeHtml(formatDate(sale.voidedAt ?? sale.createdAt))}</div>` : ''}
     <div class="footer">
-      ${store?.receiptFooter ? escapeHtml(store.receiptFooter) + '<br />' : 'Thank you for your patronage.<br />'}
+      ${store?.thankYouNote ? escapeHtml(store.thankYouNote) : store?.receiptFooter ? escapeHtml(store.receiptFooter) : 'Thank you for your patronage.'}<br />
+      ${store?.receiptFooter && store?.thankYouNote ? escapeHtml(store.receiptFooter) + '<br />' : ''}
       Goods sold in good condition. Returns accepted within ${
         store?.returnWindowDays ?? 7
       } days with this receipt.<br />
@@ -172,7 +176,7 @@ export function buildCreditNoteDocument(
         ? '<span class="badge void">Rejected</span>'
         : '';
   const body = `
-    ${storeHeader(ret.storeName, ret.storeAddress, ret.storePhone)}
+    ${storeHeader(ret.storeName, ret.storeAddress, ret.storePhone, store?.storeLogo)}
     <div class="doc-title">
       <h2>Return / Credit Note ${badge}</h2>
       <div class="meta">
@@ -196,7 +200,7 @@ export function buildCreditNoteDocument(
     </div>
     <div class="sign"><div>Customer signature</div><div>Authorised signature</div></div>
     <div class="footer">
-      ${store?.receiptFooter ? escapeHtml(store.receiptFooter) + '<br />' : ''}
+      ${store?.thankYouNote ? escapeHtml(store.thankYouNote) + '<br />' : ''}
       <span style="color:var(--gold)">${escapeHtml(productName)}</span> &middot; Strategy | Consulting | Innovation
     </div>`;
   return wrapper(`Credit Note ${ret.creditNoteNo ?? ''}`, body);

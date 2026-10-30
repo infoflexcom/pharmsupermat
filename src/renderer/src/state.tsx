@@ -69,6 +69,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void refreshState();
   }, [refreshState]);
 
+  /**
+   * Idle auto sign-out. The main process enforces the same limit on every call,
+   * so a renderer that ignores this timer still loses the session; this just
+   * returns the user to the login screen politely.
+   */
+  useEffect(() => {
+    if (!state?.session) return;
+    const minutes = Math.max(1, state.idleTimeoutMinutes || 15);
+    const limit = minutes * 60_000;
+    let last = Date.now();
+    const bump = () => {
+      last = Date.now();
+    };
+    const events: Array<keyof WindowEventMap> = [
+      'mousedown',
+      'keydown',
+      'touchstart',
+      'mousemove',
+      'scroll',
+      'wheel'
+    ];
+    for (const event of events) window.addEventListener(event, bump, { passive: true });
+    const timer = window.setInterval(() => {
+      if (Date.now() - last >= limit) {
+        notify(`Signed out after ${minutes} minutes of inactivity.`, 'info');
+        void signOut();
+      }
+    }, 5_000);
+    return () => {
+      window.clearInterval(timer);
+      for (const event of events) window.removeEventListener(event, bump);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.session?.token, state?.idleTimeoutMinutes]);
+
   const signIn = useCallback(
     async (username: string, password: string) => {
       const session = await call<SessionInfo>('auth.login', { username, password });

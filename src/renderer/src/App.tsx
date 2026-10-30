@@ -11,6 +11,13 @@ import SalesPage from './pages/SalesPage';
 import ReturnsPage from './pages/ReturnsPage';
 import ProductsPage from './pages/ProductsPage';
 import InventoryPage from './pages/InventoryPage';
+import CustomersPage from './pages/CustomersPage';
+import StockPage from './pages/StockPage';
+import BatchesPage from './pages/BatchesPage';
+import DepartmentsPage from './pages/DepartmentsPage';
+import PromotionsPage from './pages/PromotionsPage';
+import LoyaltyPage from './pages/LoyaltyPage';
+import ShiftsPage from './pages/ShiftsPage';
 import ReportsPage from './pages/ReportsPage';
 import UsersPage from './pages/UsersPage';
 import SettingsPage from './pages/SettingsPage';
@@ -67,6 +74,13 @@ export default function App() {
       {view === 'returns' ? <ReturnsPage /> : null}
       {view === 'products' ? <ProductsPage /> : null}
       {view === 'inventory' ? <InventoryPage /> : null}
+      {view === 'customers' ? <CustomersPage /> : null}
+      {view === 'stock' ? <StockPage /> : null}
+      {view === 'batches' ? <BatchesPage /> : null}
+      {view === 'departments' ? <DepartmentsPage /> : null}
+      {view === 'promotions' ? <PromotionsPage /> : null}
+      {view === 'loyalty' ? <LoyaltyPage /> : null}
+      {view === 'shifts' ? <ShiftsPage /> : null}
       {view === 'reports' ? <ReportsPage /> : null}
       {view === 'users' ? <UsersPage /> : null}
       {view === 'settings' ? <SettingsPage /> : null}

@@ -46,7 +46,13 @@ const state: AppState = {
     features,
     productName: 'Infoflex Pharm & Mart'
   },
-  setup: { licensed: true, storeConfigured: true, adminConfigured: true, setupRequired: false },
+  setup: {
+    licensed: true,
+    storeConfigured: true,
+    adminConfigured: true,
+    setupRequired: false,
+    storeNameLabel: 'Pharmacy name'
+  },
   session: {
     token: 'token',
     userId: 1,
@@ -80,18 +86,26 @@ const state: AppState = {
     mustChangePassword: false,
     storeName: 'Grace Pharmacy'
   },
-  version: 'test'
+  version: 'test',
+  storeName: 'Grace Pharmacy',
+  idleTimeoutMinutes: 15
 };
 
 const settings = {
   storeName: 'Grace Pharmacy',
   storeAddress: '12 Allen Avenue',
   storePhone: '0803 000 0000',
+  storeEmail: 'shop@grace.example',
+  storeLicenceNo: 'PCN/LAG/2026/00123',
+  storeVatNo: '',
+  storeLogo: '',
   receiptFooter: 'Thank you',
+  thankYouNote: 'Thank you for your patronage.',
   returnLimit: 2_000_000,
   returnWindowDays: 7,
   lowStockAlerts: true,
-  licenseExpiryWarningDays: 30
+  licenseExpiryWarningDays: 30,
+  idleTimeoutMinutes: 15
 };
 
 const dashboard = {

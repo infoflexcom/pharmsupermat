@@ -510,6 +510,36 @@ export const MIGRATIONS: Migration[] = [
         SELECT id, barcode, 1, 1, datetime('now') FROM products
         WHERE barcode IS NOT NULL AND TRIM(barcode) <> '';
     `
+  },
+  {
+    version: 3,
+    name: 'account_lockout_store_profile_and_idle_policy',
+    sql: /* sql */ `
+      /* ---------------------------------------------------------------- *
+       * Account lockout (5 failed sign-ins lock the account until an       *
+       * administrator unlocks it). Counters live on the user row so a      *
+       * restart, a second terminal or a copied database cannot reset them. *
+       * ---------------------------------------------------------------- */
+      ALTER TABLE users ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE users ADD COLUMN locked_until TEXT;
+      ALTER TABLE users ADD COLUMN locked_reason TEXT;
+      ALTER TABLE users ADD COLUMN password_algo TEXT NOT NULL DEFAULT 'bcrypt';
+      ALTER TABLE users ADD COLUMN email TEXT;
+      CREATE INDEX IF NOT EXISTS idx_users_locked ON users(locked_until);
+
+      /* Store profile extras captured at first-run setup (settings is key/value,
+         this keeps the defaults explicit for new installs). */
+      INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES
+        ('store_email', '', datetime('now')),
+        ('store_licence_no', '', datetime('now')),
+        ('store_vat_no', '', datetime('now')),
+        ('store_logo', '', datetime('now')),
+        ('thank_you_note', 'Thank you for your patronage.', datetime('now')),
+        ('idle_timeout_minutes', '15', datetime('now'));
+
+      /* Sign-in and user-management events drive the security view. */
+      CREATE INDEX IF NOT EXISTS idx_audit_action_created ON audit_log(action, created_at DESC);
+    `
   }
 ];
 

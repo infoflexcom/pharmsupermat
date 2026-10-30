@@ -26,7 +26,7 @@ export default function UsersPage() {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<UserAccount | null>(null);
   const [resetting, setResetting] = useState<UserAccount | null>(null);
-  const [form, setForm] = useState({ username: '', fullName: '', role: 'CASHIER' as Role, password: '' });
+  const [form, setForm] = useState({ username: '', fullName: '', role: 'CASHIER' as Role, password: '', email: '' });
   const [newPassword, setNewPassword] = useState('');
   const edition = state?.license.edition ?? null;
   const roles = availableRoles(edition);
@@ -47,7 +47,7 @@ export default function UsersPage() {
       await call('users.create', form);
       notify(`${form.fullName} added. They must set a new password at first sign-in.`, 'success');
       setCreating(false);
-      setForm({ username: '', fullName: '', role: 'CASHIER', password: '' });
+      setForm({ username: '', fullName: '', role: 'CASHIER', password: '', email: '' });
       await load();
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Could not add the user.', 'error');
@@ -61,13 +61,24 @@ export default function UsersPage() {
         id: editing.id,
         fullName: editing.fullName,
         role: editing.role,
-        active: editing.active
+        active: editing.active,
+        email: editing.email ?? ''
       });
       notify('User updated.', 'success');
       setEditing(null);
       await load();
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Could not update the user.', 'error');
+    }
+  }
+
+  async function unlock(user: UserAccount) {
+    try {
+      await call('users.unlock', { id: user.id });
+      notify(`${user.username} unlocked. They can sign in again.`, 'success');
+      await load();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not unlock the account.', 'error');
     }
   }
 
@@ -112,10 +123,24 @@ export default function UsersPage() {
             { key: 'fullName', label: 'Name' },
             { key: 'username', label: 'Username' },
             { key: 'role', label: 'Role', render: (r) => ROLE_LABELS[r.role] },
+            { key: 'email', label: 'Email', render: (r) => r.email ?? '—' },
             {
               key: 'active',
               label: 'Status',
-              render: (r) => (r.active ? <Badge tone="ok">Active</Badge> : <Badge tone="neutral">Disabled</Badge>)
+              render: (r) =>
+                r.isLocked ? (
+                  <Badge tone="danger">Locked</Badge>
+                ) : r.active ? (
+                  <Badge tone="ok">Active</Badge>
+                ) : (
+                  <Badge tone="neutral">Disabled</Badge>
+                )
+            },
+            {
+              key: 'failedAttempts',
+              label: 'Failed',
+              align: 'right',
+              render: (r) => (r.failedAttempts ? `${r.failedAttempts} / 5` : '—')
             },
             { key: 'lastLoginAt', label: 'Last sign-in', render: (r) => formatDateTime(r.lastLoginAt) },
             {
@@ -132,6 +157,11 @@ export default function UsersPage() {
                   <Button size="sm" variant="ghost" onClick={() => setEditing({ ...r })}>
                     Edit
                   </Button>
+                  {r.isLocked ? (
+                    <Button size="sm" onClick={() => void unlock(r)}>
+                      Unlock
+                    </Button>
+                  ) : null}
                   <Button size="sm" variant="ghost" onClick={() => setResetting(r)}>
                     Reset password
                   </Button>
@@ -153,7 +183,7 @@ export default function UsersPage() {
               <Button variant="ghost" onClick={() => setCreating(false)}>
                 Cancel
               </Button>
-              <Button onClick={createUser} disabled={!form.username || !form.fullName || form.password.length < 6}>
+              <Button onClick={createUser} disabled={!form.username || !form.fullName || form.password.length < 8}>
                 Create user
               </Button>
             </>
@@ -166,6 +196,9 @@ export default function UsersPage() {
             <Field label="Username" hint="3-32 characters; letters, numbers, dot, dash, underscore.">
               <Input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
             </Field>
+            <Field label="Email (optional)">
+              <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+            </Field>
             <Field label="Role">
               <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}>
                 {roles.map((role) => (
@@ -175,7 +208,7 @@ export default function UsersPage() {
                 ))}
               </Select>
             </Field>
-            <Field label="Temporary password" hint="They will be asked to change it at first sign-in.">
+            <Field label="Temporary password" hint="At least 8 characters with a letter and a number. They will change it at first sign-in.">
               <Input
                 type="text"
                 value={form.password}
@@ -213,6 +246,13 @@ export default function UsersPage() {
                 ))}
               </Select>
             </Field>
+            <Field label="Email (optional)">
+              <Input
+                type="email"
+                value={editing.email ?? ''}
+                onChange={(e) => setEditing({ ...editing, email: e.target.value })}
+              />
+            </Field>
             <Field label="Status">
               <Select
                 value={editing.active ? 'active' : 'disabled'}
@@ -222,6 +262,12 @@ export default function UsersPage() {
                 <option value="disabled">Disabled</option>
               </Select>
             </Field>
+            {editing.isLocked ? (
+              <Alert tone="warn">
+                This account is locked after five failed sign-ins. Resetting the password or pressing Unlock
+                clears the lock.
+              </Alert>
+            ) : null}
             {editing.id === session?.userId ? (
               <Alert tone="warn">This is your own account — you cannot disable the last administrator.</Alert>
             ) : null}
@@ -239,14 +285,16 @@ export default function UsersPage() {
               <Button variant="ghost" onClick={() => setResetting(null)}>
                 Cancel
               </Button>
-              <Button onClick={resetPassword} disabled={newPassword.length < 6}>
+              <Button onClick={resetPassword} disabled={newPassword.length < 8}>
                 Set password
               </Button>
             </>
           }
         >
           <div className="stack">
-            <Alert tone="info">The user will be required to change this temporary password.</Alert>
+            <Alert tone="info">
+              The user will be required to change this temporary password. Resetting also unlocks a locked account.
+            </Alert>
             <Field label="New temporary password">
               <Input type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoFocus />
             </Field>

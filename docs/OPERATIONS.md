@@ -140,12 +140,31 @@ events (no-sale, paid in, paid out), then close with the counted cash. Only the
 cashier who opened the shift can close it; the expected cash comes from the cash
 payments recorded against that shift, and every event is in the audit log.
 
+**First run**: activate the licence with the master password, then the setup
+screen asks for the administrator account and the shop's details together. The
+store name is mandatory; the logo is optional (PNG/JPEG/WebP/SVG up to 200 KB).
+Settings cannot be reached again until you sign in as that administrator.
+
+**Locked accounts**: five wrong passwords lock the account until an administrator
+opens Users and clicks Unlock. The lock is stored in the database, so closing and
+reopening the app does not reset the counter. The administrator's own account can
+also lock — unlock it from another admin account, or restore the backed-up
+database.
+
+**Idle sign-out**: Settings → Auto sign-out after inactivity (1–720 minutes,
+default 15). The main process ends the session and the window returns to the
+login card; unsaved form input is lost by design.
+
 **Upgrading an existing installation**: start the new build. The database
 migrations run on open and are tracked with `PRAGMA user_version`; schema v2
 renames `stock_batches → product_batches`, `stock_moves → stock_movements`,
 `license → license_state` and `rx_required → requires_prescription`, backfills
-categories and barcodes, and keeps every row. Take a backup first if you want a
-rollback point.
+categories and barcodes, and keeps every row; schema v3 adds `users.email`, `users.failed_attempts`,
+`users.locked_until`/`locked_reason`, `users.password_algo` and the store-profile
+settings (email, PCN/NAFDAC number, VAT number, logo, thank-you note, idle
+timeout) with defaults, so existing accounts keep working with their scrypt
+hashes until the next sign-in upgrades them to bcrypt. Take a backup first if you
+want a rollback point.
 
 ## 10. Troubleshooting
 

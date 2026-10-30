@@ -232,7 +232,7 @@ export default function ProductsPage() {
             {
               key: 'active',
               label: 'Status',
-              render: (r) => (r.active ? <Badge tone="ok">Active</Badge> : <Badge tone="neutral">Inactive</Badge>)
+              render: (r) => (r.active ? <Badge tone="success">Active</Badge> : <Badge tone="neutral">Inactive</Badge>)
             },
             {
               key: 'actions',

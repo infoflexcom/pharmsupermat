@@ -379,7 +379,7 @@ export default function ReturnsPage() {
                   label: 'Status',
                   render: (r) =>
                     r.status === 'COMPLETED' ? (
-                      <Badge tone="ok">Completed</Badge>
+                      <Badge tone="success">Completed</Badge>
                     ) : r.status === 'PENDING' ? (
                       <Badge tone="warn">Pending</Badge>
                     ) : (

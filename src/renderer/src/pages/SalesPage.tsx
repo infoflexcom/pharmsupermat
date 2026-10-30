@@ -191,7 +191,7 @@ export default function SalesPage() {
                 ) : r.voidRequestedAt ? (
                   <Badge tone="warn">Void pending</Badge>
                 ) : (
-                  <Badge tone="ok">Completed</Badge>
+                  <Badge tone="success">Completed</Badge>
                 )
             },
             { key: 'total', label: 'Total', align: 'right', render: (r) => <Money value={r.total} /> }

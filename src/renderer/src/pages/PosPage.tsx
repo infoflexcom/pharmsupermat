@@ -228,7 +228,7 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
         }
         actions={
           <div className="row tight">
-            <Badge tone="gold">{isWholesale ? 'WHOLESALE' : 'RETAIL'}</Badge>
+            <Badge tone="info">{isWholesale ? 'WHOLESALE' : 'RETAIL'}</Badge>
             <Button variant="ghost" size="sm" onClick={resetSale}>
               Clear
             </Button>
