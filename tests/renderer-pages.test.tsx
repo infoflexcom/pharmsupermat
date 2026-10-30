@@ -9,6 +9,8 @@ import PosPage from '../src/renderer/src/pages/PosPage';
 import SalesPage from '../src/renderer/src/pages/SalesPage';
 import ReturnsPage from '../src/renderer/src/pages/ReturnsPage';
 import ProductsPage from '../src/renderer/src/pages/ProductsPage';
+import StocktakePage from '../src/renderer/src/pages/StocktakePage';
+import PurchaseOrdersPage from '../src/renderer/src/pages/PurchaseOrdersPage';
 import InventoryPage from '../src/renderer/src/pages/InventoryPage';
 import ReportsPage from '../src/renderer/src/pages/ReportsPage';
 import UsersPage from '../src/renderer/src/pages/UsersPage';
@@ -133,7 +135,11 @@ const RESPONSES: Record<string, unknown> = {
   'dashboard.get': dashboard,
   'products.list': [],
   'inventory.list': [],
-  'stock.alerts': { lowStock: [], expiring: [], outOfStock: [] },
+  'stock.alerts': { lowStock: [], expiring: [], expired: [], outOfStock: [], expiryWindowDays: 90 },
+  'stocktake.list': [],
+  'purchases.list': [],
+  'directory.suppliers.list': [],
+  'mart.departments.list': [],
   'sales.list': [],
   'returns.list': [],
   'users.list': [],
@@ -190,6 +196,8 @@ const cases: { name: string; node: React.ReactNode; expect: string }[] = [
   { name: 'returns', node: <ReturnsPage />, expect: 'Find the original receipt' },
   { name: 'products', node: <ProductsPage />, expect: 'Add product' },
   { name: 'inventory', node: <InventoryPage />, expect: 'Stock on hand' },
+  { name: 'stocktake', node: <StocktakePage />, expect: 'Start new count' },
+  { name: 'purchase orders', node: <PurchaseOrdersPage />, expect: 'Orders and goods received' },
   { name: 'reports', node: <ReportsPage />, expect: 'Run report' },
   { name: 'users', node: <UsersPage />, expect: 'Add user' },
   { name: 'settings', node: <SettingsPage />, expect: 'Store identity' },

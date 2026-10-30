@@ -68,6 +68,7 @@ interface SaleItemRow {
   batch_id: number | null;
   batch_no: string | null;
   rx_required: number;
+  is_weighed: number;
 }
 
 function mapItem(row: SaleItemRow): SaleItem {
@@ -84,7 +85,8 @@ function mapItem(row: SaleItemRow): SaleItem {
     lineTotal: row.line_total,
     batchId: row.batch_id,
     batchNo: row.batch_no,
-    rxRequired: !!row.rx_required
+    rxRequired: !!row.rx_required,
+    isWeighed: !!row.is_weighed
   };
 }
 
@@ -180,7 +182,17 @@ export function createSale(
         throw validation('Quantities must be positive whole numbers.');
       }
       const product = requireProduct(db, line.productId);
-      const listPrice = input.docType === 'INVOICE' ? product.wholesalePrice : product.price;
+      // Weighed goods are sold per kilogram. The cart sends the weight in grams
+      // (an integer) so the ledger and the line maths stay exact.
+      const weighed = product.isWeighed && product.pricePerKg !== null;
+      if (product.isWeighed && product.pricePerKg === null) {
+        throw validation(`${product.name} is set up as a weighed item but has no price per kg.`);
+      }
+      const listPrice = weighed
+        ? (product.pricePerKg as number)
+        : input.docType === 'INVOICE'
+          ? product.wholesalePrice
+          : product.price;
       const unitPrice = line.unitPrice ?? listPrice;
       if (!Number.isInteger(unitPrice) || unitPrice < 0) throw validation('Unit price is invalid.');
       if (unitPrice !== listPrice) {
@@ -210,10 +222,11 @@ export function createSale(
             unit_price: unitPrice,
             list_price: listPrice,
             cost_price: part.costPrice,
-            line_total: part.qty * unitPrice,
+            line_total: weighed ? Math.round((part.qty * unitPrice) / 1000) : part.qty * unitPrice,
             batch_id: part.batchId,
             batch_no: part.batchNo,
-            rx_required: product.rxRequired ? 1 : 0
+            rx_required: product.rxRequired ? 1 : 0,
+            is_weighed: weighed ? 1 : 0
           }
         });
       }
@@ -287,8 +300,9 @@ export function createSale(
 
     const insertItem = db.handle.prepare(
       `INSERT INTO sale_items
-        (sale_id, product_id, sku, name, qty, unit_price, list_price, cost_price, line_total, batch_id, batch_no, rx_required)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (sale_id, product_id, sku, name, qty, unit_price, list_price, cost_price, line_total, batch_id, batch_no,
+         rx_required, is_weighed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     for (const item of created) {
       insertItem.run(
@@ -303,7 +317,8 @@ export function createSale(
         item.row.line_total,
         item.row.batch_id,
         item.row.batch_no,
-        item.row.rx_required
+        item.row.rx_required,
+        item.row.is_weighed
       );
       commitSaleAllocation(db, item.productId, item.allocation, {
         refType: 'sale',

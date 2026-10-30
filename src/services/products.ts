@@ -1,6 +1,6 @@
 import type { Database } from '../db';
 import { nowIso } from '../db';
-import type { Product, ProductInput, StockReceiveInput } from '../shared/types';
+import type { Money, Product, ProductInput, StockReceiveInput } from '../shared/types';
 import { AppError, conflict, notFound, validation } from '../shared/errors';
 import { audit } from './audit';
 import type { Actor } from './stock';
@@ -12,8 +12,11 @@ interface ProductRow {
   sku: string;
   barcode: string | null;
   name: string;
+  brand: string | null;
   category: string | null;
   unit: string;
+  pack_size: number;
+  pack_unit: string;
   cost_price: number;
   price: number;
   wholesale_price: number;
@@ -30,6 +33,8 @@ interface ProductRow {
   plu_code: string | null;
   price_per_kg: number | null;
   is_weighed: number;
+  wholesale_min_qty: number;
+  expiry_tracking: number;
   created_at: string;
   updated_at: string;
 }
@@ -47,11 +52,15 @@ function mapProduct(row: ProductRow): Product {
     sku: row.sku,
     barcode: row.barcode,
     name: row.name,
+    brand: row.brand,
     category: row.category,
     unit: row.unit,
+    packSize: row.pack_size,
+    packUnit: row.pack_unit,
     costPrice: row.cost_price,
     price: row.price,
     wholesalePrice: row.wholesale_price,
+    wholesaleMinQty: row.wholesale_min_qty,
     reorderLevel: row.reorder_level,
     rxRequired: !!row.requires_prescription,
     active: !!row.active,
@@ -65,6 +74,7 @@ function mapProduct(row: ProductRow): Product {
     pluCode: row.plu_code,
     pricePerKg: row.price_per_kg,
     isWeighed: !!row.is_weighed,
+    expiryTracking: !!row.expiry_tracking || !!row.nearest_expiry,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -160,6 +170,15 @@ function validateProductInput(input: ProductInput): void {
   if (input.reorderLevel !== undefined && (!Number.isInteger(input.reorderLevel) || input.reorderLevel < 0)) {
     throw validation('Reorder level must be zero or more.');
   }
+  if (input.packSize !== undefined && (!Number.isInteger(input.packSize) || input.packSize < 1 || input.packSize > 10_000)) {
+    throw validation('Pack size must be a whole number between 1 and 10,000.');
+  }
+  if (input.wholesaleMinQty !== undefined && (!Number.isInteger(input.wholesaleMinQty) || input.wholesaleMinQty < 1)) {
+    throw validation('Wholesale minimum quantity must be one or more.');
+  }
+  if (input.brand !== undefined && input.brand !== null && input.brand.length > 80) {
+    throw validation('Brand name is too long.');
+  }
   if (input.openingStock !== undefined && (!Number.isInteger(input.openingStock) || input.openingStock < 0)) {
     throw validation('Opening stock must be zero or more.');
   }
@@ -201,21 +220,26 @@ export function createProduct(db: Database, input: ProductInput, actor: Actor): 
     const result = db.handle
       .prepare(
         `INSERT INTO products
-          (sku, barcode, name, category, category_id, unit, cost_price, price, wholesale_price, reorder_level,
-           requires_prescription, generic_name, supplier_id, department_id, shelf_location, plu_code, price_per_kg,
-           is_weighed, active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+          (sku, barcode, name, brand, category, category_id, unit, pack_size, pack_unit, cost_price, price,
+           wholesale_price, wholesale_min_qty, reorder_level, requires_prescription, generic_name, supplier_id,
+           department_id, shelf_location, plu_code, price_per_kg, is_weighed, expiry_tracking, active,
+           created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
       )
       .run(
         sku,
         input.barcode?.trim() || null,
         input.name.trim(),
+        input.brand?.trim() || null,
         input.category?.trim() || null,
         input.categoryId ?? ensureCategory(db, input.category ?? null),
         input.unit?.trim() || 'unit',
+        input.packSize ?? 1,
+        input.packUnit?.trim() || 'pack',
         input.costPrice,
         input.price,
         input.wholesalePrice ?? input.price,
+        input.wholesaleMinQty ?? 1,
         input.reorderLevel ?? 0,
         input.rxRequired ? 1 : 0,
         input.genericName?.trim() || null,
@@ -225,6 +249,7 @@ export function createProduct(db: Database, input: ProductInput, actor: Actor): 
         input.pluCode?.trim() || null,
         input.pricePerKg ?? null,
         input.isWeighed ? 1 : 0,
+        input.expiryTracking || input.openingExpiry ? 1 : 0,
         now,
         now
       );
@@ -275,22 +300,26 @@ export function updateProduct(db: Database, input: ProductInput, actor: Actor): 
 
     db.handle
       .prepare(
-        `UPDATE products SET sku = ?, barcode = ?, name = ?, category = ?, category_id = ?, unit = ?, cost_price = ?,
-           price = ?, wholesale_price = ?, reorder_level = ?, requires_prescription = ?, generic_name = ?,
-           supplier_id = ?, department_id = ?, shelf_location = ?, plu_code = ?, price_per_kg = ?, is_weighed = ?,
-           updated_at = ?
+        `UPDATE products SET sku = ?, barcode = ?, name = ?, brand = ?, category = ?, category_id = ?, unit = ?,
+           pack_size = ?, pack_unit = ?, cost_price = ?, price = ?, wholesale_price = ?, wholesale_min_qty = ?,
+           reorder_level = ?, requires_prescription = ?, generic_name = ?, supplier_id = ?, department_id = ?,
+           shelf_location = ?, plu_code = ?, price_per_kg = ?, is_weighed = ?, expiry_tracking = ?, updated_at = ?
          WHERE id = ?`
       )
       .run(
         sku,
         input.barcode?.trim() || null,
         input.name.trim(),
+        input.brand?.trim() || null,
         input.category?.trim() || null,
         input.categoryId ?? ensureCategory(db, input.category ?? null),
         input.unit?.trim() || 'unit',
+        input.packSize ?? existing.packSize,
+        input.packUnit?.trim() || existing.packUnit,
         input.costPrice,
         input.price,
         input.wholesalePrice ?? input.price,
+        input.wholesaleMinQty ?? existing.wholesaleMinQty,
         input.reorderLevel ?? 0,
         input.rxRequired ? 1 : 0,
         input.genericName?.trim() || null,
@@ -300,13 +329,25 @@ export function updateProduct(db: Database, input: ProductInput, actor: Actor): 
         input.pluCode?.trim() || null,
         input.pricePerKg ?? null,
         input.isWeighed ? 1 : 0,
+        input.expiryTracking === undefined ? (existing.expiryTracking ? 1 : 0) : input.expiryTracking ? 1 : 0,
         now,
         existing.id
       );
 
     syncPrimaryBarcode(db, existing.id, input.barcode?.trim() || null);
 
-    const priceChanged = existing.price !== input.price || existing.wholesalePrice !== (input.wholesalePrice ?? input.price);
+    // Every money field that moves is recorded with its old and new value, so
+    // a cost or price edit can always be reconstructed from the audit trail.
+    const moneyChanges: Record<string, { from: number; to: number }> = {};
+    if (existing.price !== input.price) moneyChanges.price = { from: existing.price, to: input.price };
+    const nextWholesale = input.wholesalePrice ?? input.price;
+    if (existing.wholesalePrice !== nextWholesale) {
+      moneyChanges.wholesalePrice = { from: existing.wholesalePrice, to: nextWholesale };
+    }
+    if (existing.costPrice !== input.costPrice) {
+      moneyChanges.costPrice = { from: existing.costPrice, to: input.costPrice };
+    }
+    const priceChanged = Object.keys(moneyChanges).length > 0;
     audit(db, {
       action: priceChanged ? 'product.update.price' : 'product.update',
       entity: 'product',
@@ -315,11 +356,7 @@ export function updateProduct(db: Database, input: ProductInput, actor: Actor): 
       username: actor.username,
       severity: priceChanged ? 'WARN' : 'INFO',
       details: priceChanged
-        ? {
-            name: input.name.trim(),
-            price: { from: existing.price, to: input.price },
-            wholesalePrice: { from: existing.wholesalePrice, to: input.wholesalePrice ?? input.price }
-          }
+        ? { name: input.name.trim(), ...moneyChanges }
         : { name: input.name.trim() }
     });
     return getProduct(db, existing.id);
@@ -352,16 +389,26 @@ export function receiveProductStock(
   db: Database,
   input: StockReceiveInput,
   actor: Actor
-): { product: Product; batches: ReturnType<typeof listBatches> } {
-  if (!Number.isInteger(input.qty) || input.qty <= 0) {
-    throw validation('Quantity received must be a positive whole number.');
-  }
+): { product: Product; batches: ReturnType<typeof listBatches>; receivedQty: number } {
   if (input.costPrice !== undefined && (!Number.isInteger(input.costPrice) || input.costPrice < 0)) {
     throw validation('Cost price is invalid.');
   }
   return db.transaction(() => {
     const product = getProduct(db, input.productId);
-    receiveStock(db, product.id, input.qty, {
+
+    // Packs and kilograms are converted to the base unit the stock ledger uses.
+    let qty = input.qty;
+    if (input.packs !== undefined) qty = packsToUnits(input.packs, product.packSize);
+    if (input.weightKg !== undefined) {
+      if (!product.isWeighed) throw validation('Only weighed products are received in kilograms.');
+      if (!(input.weightKg > 0)) throw validation('Weight received must be greater than zero.');
+      qty = Math.round(input.weightKg * 1000);
+    }
+    if (!Number.isInteger(qty) || (qty ?? 0) <= 0) {
+      throw validation('Quantity received must be a positive whole number.');
+    }
+    const receivedQty = qty as number;
+    receiveStock(db, product.id, receivedQty, {
       batchNo: input.batchNo,
       expiryDate: input.expiryDate ?? null,
       costPrice: input.costPrice ?? product.costPrice,
@@ -377,13 +424,16 @@ export function receiveProductStock(
       username: actor.username,
       details: {
         name: product.name,
-        qty: input.qty,
+        qty: receivedQty,
+        packs: input.packs ?? null,
+        packSize: product.packSize,
+        weightKg: input.weightKg ?? null,
         batchNo: input.batchNo ?? null,
         expiryDate: input.expiryDate ?? null,
         costPrice: input.costPrice ?? product.costPrice
       }
     });
-    return { product: getProduct(db, product.id), batches: listBatches(db, product.id) };
+    return { product: getProduct(db, product.id), batches: listBatches(db, product.id), receivedQty };
   });
 }
 
@@ -391,4 +441,46 @@ export function requireProduct(db: Database, id: number): Product {
   const product = getProduct(db, id);
   if (!product.active) throw new AppError('CONFLICT', `${product.name} is no longer available.`);
   return product;
+}
+
+/* ------------------------------------------------------------------ */
+/* Packs, costs and public shapes                                      */
+/* ------------------------------------------------------------------ */
+
+/** Converts a pack count into base units (never below one pack). */
+export function packsToUnits(packs: number, packSize: number): number {
+  if (!Number.isInteger(packs) || packs < 0) throw validation('Pack quantity must be zero or more.');
+  return packs * Math.max(1, packSize);
+}
+
+/** Converts base units into whole packs plus the loose remainder. */
+export function unitsToPacks(units: number, packSize: number): { packs: number; loose: number } {
+  const size = Math.max(1, packSize);
+  return { packs: Math.floor(units / size), loose: units % size };
+}
+
+export type ProductWithCost = Product & { costPrice: Money };
+
+/**
+ * Cost prices are commercially sensitive: only a role that may set prices sees
+ * them. This is applied in the MAIN process (see invoke.ts) so a renderer that
+ * asks directly still gets a stripped payload.
+ */
+export function redactProductCost(product: Product, canSeeCost: boolean): Product {
+  return canSeeCost ? product : { ...product, costPrice: 0 };
+}
+
+export function redactCostsDeep<T>(value: T, canSeeCost: boolean): T {
+  if (canSeeCost) return value;
+  const MONEY_KEYS = new Set(['costPrice', 'cost_price', 'cost', 'unitCost', 'profit', 'margin', 'costValue']);
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (!node || typeof node !== 'object') return node;
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(node as Record<string, unknown>)) {
+      out[key] = MONEY_KEYS.has(key) ? 0 : walk(inner);
+    }
+    return out;
+  };
+  return walk(value) as T;
 }

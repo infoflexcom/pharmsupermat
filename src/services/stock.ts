@@ -2,6 +2,8 @@ import type { Database } from '../db';
 import { nowIso } from '../db';
 import type { Batch } from '../shared/types';
 import { AppError, notFound, validation } from '../shared/errors';
+import { getProduct } from './products';
+import { audit } from './audit';
 
 export const DEFAULT_BATCH = 'DEFAULT';
 
@@ -218,33 +220,81 @@ export function commitSaleAllocation(
 
 export function adjustStock(
   db: Database,
-  input: { productId: number; batchId?: number; newQty: number; reason: string },
+  input: {
+    productId: number;
+    batchId?: number;
+    newQty?: number;
+    removeQty?: number;
+    reason: string;
+    reasonType?: 'DAMAGED' | 'LOST' | 'CORRECTION' | 'COUNT';
+  },
   actor: Actor
-): void {
-  if (!Number.isInteger(input.newQty) || input.newQty < 0) {
+): { productId: number; batchId: number; before: number; after: number; delta: number; reasonType: string } {
+  const reason = (input.reason ?? '').trim();
+  if (!reason) throw validation('A reason is required for a stock adjustment.');
+  if (reason.length > 240) throw validation('The adjustment reason is too long.');
+  const reasonType = input.reasonType ?? 'CORRECTION';
+  if (!['DAMAGED', 'LOST', 'CORRECTION', 'COUNT'].includes(reasonType)) {
+    throw validation('Choose a valid adjustment type.');
+  }
+
+  const product = getProduct(db, input.productId);
+  if (input.newQty !== undefined && (!Number.isInteger(input.newQty) || input.newQty < 0)) {
     throw validation('Stock count must be zero or more.');
   }
-  if (!input.reason.trim()) throw validation('A reason is required for a stock adjustment.');
-  const batch = input.batchId
-    ? (db.handle
-        .prepare('SELECT id, qty FROM product_batches WHERE id = ? AND product_id = ?')
-        .get(input.batchId, input.productId) as { id: number; qty: number } | undefined)
-    : (db.handle
-        .prepare(
-          `SELECT id, qty FROM product_batches WHERE product_id = ? ORDER BY qty DESC LIMIT 1`
-        )
-        .get(input.productId) as { id: number; qty: number } | undefined);
-  if (!batch) throw notFound('Stock batch');
-  const delta = input.newQty - batch.qty;
-  if (delta === 0) return;
-  const now = nowIso();
-  db.handle
-    .prepare('UPDATE product_batches SET qty = ?, updated_at = ? WHERE id = ?')
-    .run(input.newQty, now, batch.id);
-  db.handle
-    .prepare(
-      `INSERT INTO stock_movements (product_id, batch_id, qty_change, type, note, user_id, created_at)
-       VALUES (?, ?, ?, 'ADJUSTMENT', ?, ?, ?)`
-    )
-    .run(input.productId, batch.id, delta, input.reason, actor.userId, now);
+  if (input.removeQty !== undefined && (!Number.isInteger(input.removeQty) || input.removeQty <= 0)) {
+    throw validation('The quantity removed must be a positive whole number.');
+  }
+  if (input.newQty === undefined && input.removeQty === undefined) {
+    throw validation('Enter the counted quantity or the quantity to remove.');
+  }
+
+  return db.transaction(() => {
+    const batch = input.batchId
+      ? (db.handle
+          .prepare('SELECT id, qty FROM product_batches WHERE id = ? AND product_id = ?')
+          .get(input.batchId, input.productId) as { id: number; qty: number } | undefined)
+      : (db.handle
+          .prepare('SELECT id, qty FROM product_batches WHERE product_id = ? ORDER BY qty DESC LIMIT 1')
+          .get(input.productId) as { id: number; qty: number } | undefined);
+    if (!batch) throw notFound('Stock batch');
+
+    const before = batch.qty;
+    const after = input.newQty !== undefined ? input.newQty : Math.max(0, before - (input.removeQty ?? 0));
+    if (input.removeQty !== undefined && input.removeQty > before) {
+      throw validation(`${product.name}: only ${before} in stock, cannot remove ${input.removeQty}.`);
+    }
+    if (after === before) {
+      return { productId: product.id, batchId: batch.id, before, after, delta: 0, reasonType };
+    }
+
+    const now = nowIso();
+    db.handle
+      .prepare('UPDATE product_batches SET qty = ?, updated_at = ? WHERE id = ?')
+      .run(after, now, batch.id);
+    db.handle
+      .prepare(
+        `INSERT INTO stock_movements (product_id, batch_id, qty_change, type, reason_type, note, user_id, created_at)
+         VALUES (?, ?, ?, 'ADJUSTMENT', ?, ?, ?, ?)`
+      )
+      .run(product.id, batch.id, after - before, reasonType, reason, actor.userId, now);
+
+    audit(db, {
+      action: 'stock.adjust',
+      entity: 'product',
+      entityId: product.id,
+      userId: actor.userId,
+      username: actor.username,
+      severity: 'WARN',
+      details: {
+        name: product.name,
+        reasonType,
+        reason,
+        qty: { from: before, to: after },
+        delta: after - before,
+        costValue: Math.abs(after - before) * product.costPrice
+      }
+    });
+    return { productId: product.id, batchId: batch.id, before, after, delta: after - before, reasonType };
+  });
 }

@@ -30,6 +30,8 @@ export const TABLES: TableSpec[] = [
   { name: 'license_history', owner: 'shared', description: 'Append-only history of every licence period, renewal and edition change.' },
   { name: 'license_attempts', owner: 'shared', description: 'Master-password attempt outcomes that drive the 30s/1m/5m delay ladder (never stores the typed value).' },
   { name: 'license_guard', owner: 'shared', description: 'Per-install random secret used to derive the licence HMAC key.' },
+  { name: 'stock_counts', owner: 'supermarket', description: 'Stocktake header: draft/posted counts with variance totals.' },
+  { name: 'stock_count_items', owner: 'supermarket', description: 'Counted quantity per product/batch with the system quantity and variance.' },
   { name: 'categories', owner: 'shared', description: 'Product categories; products.category keeps a denormalised display name.' },
   { name: 'suppliers', owner: 'shared', description: 'Suppliers used by purchases.' },
   { name: 'customers', owner: 'shared', description: 'Customer directory for invoices and credit charges.' },

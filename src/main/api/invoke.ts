@@ -4,6 +4,7 @@ import { AppError } from '../../shared/errors';
 import { getLicenseStatus } from '../../license/license';
 import { audit } from '../../services/audit';
 import { resolveSession, type ApiContext, type Session } from '../../services/session';
+import { redactCostsDeep } from '../../services/products';
 import { HANDLER_MAP, PASSWORD_CHANGE_ALLOWLIST, handlerMapFor } from './registry';
 
 export interface HandlerArgs {
@@ -105,7 +106,11 @@ export async function invoke(
     }
 
     const data = await entry.handler({ ctx, payload, session, license, features, channel });
-    return { ok: true, data };
+    // Cost prices are commercially sensitive. Only a role that may manage
+    // products (i.e. the administrator) sees them; every other response is
+    // stripped here in main so a curious renderer gains nothing.
+    const seesCost = !!session?.permissions.includes('products.manage');
+    return { ok: true, data: seesCost ? data : redactCostsDeep(data, false) };
   } catch (error) {
     if (error instanceof AppError) {
       if (error.code === 'FORBIDDEN' && session) {

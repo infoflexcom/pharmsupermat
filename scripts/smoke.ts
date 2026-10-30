@@ -199,6 +199,102 @@ async function main() {
     assert(list.length === products.length, 'catalogue size mismatch');
   });
 
+  await check('bulk import: dry run reports problems, then imports the clean rows', async () => {
+    const csv = [
+      'SKU,Name,Brand,Unit,Pack Size,Cost Price,Retail Price,Reorder Level,Opening Stock',
+      'IMP-1,"Imported Tonic",Emzor,bottle,12,"2,000.00","3,000.00",6,24',
+      'IMP-2,,,,,,,,'
+    ].join('\r\n');
+    const before = await api<unknown[]>('products.list', {});
+    const dry = await api<{ mode: string; validRows: number; errors: unknown[] }>('products.import', {
+      filename: 'smoke.csv',
+      data: csv,
+      encoding: 'utf8',
+      mode: 'DRY_RUN'
+    });
+    assert(dry.mode === 'DRY_RUN' && dry.validRows === 1, 'dry run did not validate the sheet');
+    assert(dry.errors.length >= 1, 'dry run did not report the bad row');
+    const afterDry = await api<unknown[]>('products.list', {});
+    assert(afterDry.length === before.length, 'dry run wrote products');
+
+    const applied = await api<{ created: number }>('products.import', {
+      filename: 'smoke.csv',
+      data: csv,
+      encoding: 'utf8',
+      mode: 'IMPORT'
+    });
+    assert(applied.created === 1, 'import did not create the product');
+    const after = await api<unknown[]>('products.list', {});
+    assert(after.length === before.length + 1, 'import did not persist');
+  });
+
+  await check('export, template and pack-aware stock receipt', async () => {
+    const csv = await api<{ encoding: string; rows: number; data: string }>('products.export', { format: 'CSV' });
+    assert(csv.encoding === 'utf8' && csv.data.includes('Name'), 'CSV export failed');
+    const template = await api<{ encoding: string; data: string }>('products.exportTemplate', {});
+    assert(template.encoding === 'base64' && template.data.length > 100, 'template export failed');
+
+    const [imported] = await api<Array<{ id: number; packSize: number; stockQty: number }>>('products.list', {
+      search: 'Imported Tonic'
+    });
+    assert(imported.packSize === 12, 'pack size not imported');
+    const received = await api<{ receivedQty: number; product: { stockQty: number } }>('stock.receive', {
+      productId: imported.id,
+      packs: 2
+    });
+    assert(received.receivedQty === 24, `pack conversion wrong: ${received.receivedQty}`);
+    assert(received.product.stockQty === 48, 'stock not added');
+  });
+
+  await check('stock adjustments need a reason and are audited', async () => {
+    const [imported] = await api<Array<{ id: number; stockQty: number }>>('products.list', {
+      search: 'Imported Tonic'
+    });
+    await expectError(
+      'stock.adjust',
+      { productId: imported.id, removeQty: 1, reasonType: 'DAMAGED', reason: '' },
+      'VALIDATION'
+    );
+    const adjusted = await api<{ delta: number; after: number }>('stock.adjust', {
+      productId: imported.id,
+      removeQty: 2,
+      reasonType: 'DAMAGED',
+      reason: 'Bottles broken in transit'
+    });
+    assert(adjusted.delta === -2, 'adjustment delta wrong');
+    const ledger = await api<Array<{ type: string; reasonType: string }>>('stock.ledger', {
+      productId: imported.id
+    });
+    assert(ledger[0].type === 'ADJUSTMENT' && ledger[0].reasonType === 'DAMAGED', 'adjustment not in ledger');
+  });
+
+  await check('cost prices are hidden from non-admin roles', async () => {
+    const created = await api<{ id: number }>('users.create', {
+      username: `viewer${stamp}`,
+      fullName: 'Ngozi Viewer',
+      role: 'CASHIER',
+      password: 'viewerpass1'
+    });
+    assert(created.id > 0, 'viewer not created');
+    const first = await api<{ token: string }>('auth.login', { username: `viewer${stamp}`, password: 'viewerpass1' });
+    const adminToken = token;
+    token = first.token;
+    try {
+      await api('auth.changePassword', { newPassword: 'viewerpass2' });
+      const session = await api<{ token: string }>('auth.login', { username: `viewer${stamp}`, password: 'viewerpass2' });
+      token = session.token;
+      const products = await api<Array<{ costPrice: number; price: number }>>('products.list', {});
+      assert(products.length > 0, 'no products for viewer');
+      assert(products.every((product) => product.costPrice === 0), 'cashier can see cost prices');
+      assert(products.some((product) => product.price > 0), 'selling prices were stripped too');
+      await expectError('stock.adjust', { productId: 1, removeQty: 1, reason: 'x', reasonType: 'LOST' }, 'FORBIDDEN');
+      await expectError('labels.print', {}, 'EDITION_RESTRICTED');
+      await expectError('stocktake.create', {}, 'EDITION_RESTRICTED');
+    } finally {
+      token = adminToken;
+    }
+  });
+
   let saleId = 0;
   let saleReceipt = '';
   await check('cash sale deducts stock, applies discount and prints store name', async () => {

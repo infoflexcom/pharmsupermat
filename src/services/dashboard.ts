@@ -5,7 +5,7 @@ import { listStockAlerts } from './inventory';
 
 export function getDashboard(
   db: Database,
-  options: { scopeUserId?: number; expiryWindowDays?: number } = {}
+  options: { scopeUserId?: number; expiryWindowDays?: number; trackedOnly?: boolean } = {}
 ): DashboardSummary {
   const today = new Date().toISOString().slice(0, 10);
   const weekStart = new Date(Date.now() - 6 * 86_400_000).toISOString().slice(0, 10);
@@ -48,7 +48,9 @@ export function getDashboard(
     )
     .get() as { voids: number; returns: number };
 
-  const alerts = listStockAlerts(db, options.expiryWindowDays ?? 90);
+  const alerts = listStockAlerts(db, options.expiryWindowDays ?? 90, {
+    trackedOnly: options.trackedOnly ?? false
+  });
 
   const recent = db.handle
     .prepare(

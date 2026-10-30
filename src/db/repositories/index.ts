@@ -80,6 +80,9 @@ export interface ReturnItemRow {
   unit_price: number; line_total: number; batch_id: number | null; cost_price: number; restock: number;
 }
 export interface PurchaseRow {
+  grn_no: string | null;
+  received_at: string | null;
+  ordered_at: string | null;
   id: number; purchase_no: string; supplier_id: number | null; supplier_name: string | null;
   invoice_no: string | null; purchase_date: string; subtotal: number; discount: number; total: number;
   amount_paid: number; status: 'DRAFT' | 'RECEIVED' | 'CANCELLED'; note: string | null;
@@ -262,7 +265,7 @@ export function createRepositories(db: Database): Repositories {
     }),
     purchases: new Table<PurchaseRow>(db, {
       table: 'purchases',
-      columns: P<PurchaseRow>(['id', 'purchase_no', 'supplier_id', 'supplier_name', 'invoice_no', 'purchase_date', 'subtotal', 'discount', 'total', 'amount_paid', 'status', 'note', 'user_id', 'username', 'created_at']),
+      columns: P<PurchaseRow>(['id', 'purchase_no', 'grn_no', 'received_at', 'ordered_at', 'supplier_id', 'supplier_name', 'invoice_no', 'purchase_date', 'subtotal', 'discount', 'total', 'amount_paid', 'status', 'note', 'user_id', 'username', 'created_at']),
       orderBy: 'id DESC'
     }),
     purchaseItems: new Table<PurchaseItemRow>(db, {

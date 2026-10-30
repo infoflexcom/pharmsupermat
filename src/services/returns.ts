@@ -78,8 +78,13 @@ function mapReturn(row: ReturnRow, items?: ReturnLine[]): SaleReturn {
 
 function getReturnItems(db: Database, returnId: number): ReturnLine[] {
   const rows = db.handle
-    .prepare('SELECT * FROM return_items WHERE return_id = ? ORDER BY id')
-    .all(returnId) as ReturnItemRow[];
+    .prepare(
+      `SELECT ri.*, COALESCE(si.is_weighed, 0) AS is_weighed
+         FROM return_items ri
+         LEFT JOIN sale_items si ON si.id = ri.sale_item_id
+        WHERE ri.return_id = ? ORDER BY ri.id`
+    )
+    .all(returnId) as (ReturnItemRow & { is_weighed: number })[];
   return rows.map((r) => ({
     id: r.id,
     returnId: r.return_id,
@@ -90,7 +95,8 @@ function getReturnItems(db: Database, returnId: number): ReturnLine[] {
     unitPrice: r.unit_price,
     lineTotal: r.line_total,
     batchId: r.batch_id,
-    restock: !!r.restock
+    restock: !!r.restock,
+    isWeighed: !!r.is_weighed
   }));
 }
 
@@ -214,7 +220,13 @@ export function createReturn(
     return { saleItem, qty: line.qty, restock: line.restock ?? input.restock ?? true };
   });
 
-  const total = prepared.reduce((sum, p) => sum + p.qty * p.saleItem.unitPrice, 0);
+  // Weighed lines are priced per kilo but returned in grams.
+  const lineMoney = (qty: number, unitPrice: number, weighed: boolean): number =>
+    weighed ? Math.round((qty * unitPrice) / 1000) : qty * unitPrice;
+  const total = prepared.reduce(
+    (sum, p) => sum + lineMoney(p.qty, p.saleItem.unitPrice, p.saleItem.isWeighed),
+    0
+  );
   const canApprove = actor.permissions.includes('returns.approve');
   const withinLimit = total <= store.returnLimit;
   const withinWindow = saleAgeDays <= store.returnWindowDays;
@@ -252,7 +264,7 @@ export function createReturn(
         p.saleItem.name,
         p.qty,
         p.saleItem.unitPrice,
-        p.qty * p.saleItem.unitPrice,
+        lineMoney(p.qty, p.saleItem.unitPrice, p.saleItem.isWeighed),
         p.saleItem.batchId,
         p.saleItem.costPrice,
         p.restock ? 1 : 0

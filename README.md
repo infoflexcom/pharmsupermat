@@ -29,7 +29,7 @@ npm run dev:web             # http://localhost:4173
 
 # Checks
 npm run typecheck
-VENDOR_MASTER_PASSWORD='...' npm test      # 106 unit/integration/renderer tests
+VENDOR_MASTER_PASSWORD='...' npm test      # 122 unit/integration/renderer tests
 VENDOR_MASTER_PASSWORD='...' npm run verify:secrets   # proves the password is nowhere in plain text
 npm run db:verify           # writes + reads a row in every table on a temp database
 npm run db:schema           # regenerates docs/SCHEMA.md from the real migrations
@@ -51,7 +51,9 @@ administrator account.
 | Area | Details |
 | --- | --- |
 | Point of sale | search / barcode, cart, discount, four payment methods, change due, printable receipt, stock deducted in the same transaction |
-| Products | codes, barcodes, cost/selling/wholesale prices, reorder levels, prescription flag, batches and expiry (pharmacy) |
+| Products | codes, barcodes, brand, pack size with automatic pack→unit conversion, cost/selling/wholesale prices, wholesale minimum, reorder levels, prescription flag, batches and expiry (pharmacy); bulk CSV/Excel import with an error report, export and a downloadable template |
+| Stock control | receiving by pack, by unit or by weight (kg), adjustments for damaged/lost/correction with a mandatory reason, supervisor-level receipts, administrator-only adjustments |
+| Supermarket extras | departments, shelf/aisle, multiple barcodes, variants, weighed items with PLU and price per kg, stocktake with a variance report, supplier purchase orders and goods-received notes, bulk price-label printing |
 | Inventory | live stock, FEFO batch selling, expired stock never sold, stock receiving, audited stock counts, movement ledger |
 | Returns | credit notes, cashier limit + return window, supervisor approval queue, optional restocking |
 | Voids | never deletes a sale — marks it void, reverses stock, approval trail, everything audited |

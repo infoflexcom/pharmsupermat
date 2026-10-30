@@ -83,6 +83,16 @@ export function getAllSettings(db: Database): SettingsPayload {
   };
 }
 
+/** Reads a numeric setting that is not part of the typed settings payload. */
+export function getNumericSetting(db: Database, key: string, fallback: number): number {
+  const row = db.handle.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+    | { value: string }
+    | undefined;
+  if (!row) return fallback;
+  const parsed = Number(row.value);
+  return Number.isFinite(parsed) ? Math.round(parsed) : fallback;
+}
+
 export function getStoreProfile(db: Database): StoreProfile {
   const s = getAllSettings(db);
   return {

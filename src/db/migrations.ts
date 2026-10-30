@@ -607,6 +607,81 @@ export const MIGRATIONS: Migration[] = [
         created_at TEXT NOT NULL
       );
     `
+  },
+  {
+    version: 5,
+    name: 'product_packs_brands_stock_counts_and_grn',
+    sql: /* sql */ `
+      /* ---------------------------------------------------------------- *
+       * Product master data: brand, pack size (units per pack) and the    *
+       * wholesale minimum quantity. Stock is always kept in base units;    *
+       * receiving packs is converted on the way in.                        *
+       * ---------------------------------------------------------------- */
+      ALTER TABLE products ADD COLUMN brand TEXT;
+      ALTER TABLE products ADD COLUMN pack_size INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE products ADD COLUMN pack_unit TEXT NOT NULL DEFAULT 'pack';
+      ALTER TABLE products ADD COLUMN wholesale_min_qty INTEGER NOT NULL DEFAULT 1;
+      /* Supermarket perishables opt in to expiry tracking; pharmacy products
+         are always tracked because the module owns batches. */
+      ALTER TABLE products ADD COLUMN expiry_tracking INTEGER NOT NULL DEFAULT 0;
+
+      /* Sub-categories: a category may sit under a department-style parent. */
+      ALTER TABLE categories ADD COLUMN parent_id INTEGER REFERENCES categories(id);
+      CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id);
+
+      /* Structured adjustment reason (damaged / lost / correction / count). */
+      ALTER TABLE stock_movements ADD COLUMN reason_type TEXT;
+      CREATE INDEX IF NOT EXISTS idx_moves_type ON stock_movements(type, created_at DESC);
+
+      /* Goods-received notes against a purchase (draft order -> received). */
+      ALTER TABLE purchases ADD COLUMN grn_no TEXT;
+      ALTER TABLE purchases ADD COLUMN received_at TEXT;
+      ALTER TABLE purchases ADD COLUMN ordered_at TEXT;
+
+      /* ---------------------------------------------------------------- *
+       * Stock counts (stocktake) and their variance report.               *
+       * ---------------------------------------------------------------- */
+      CREATE TABLE IF NOT EXISTS stock_counts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        count_no TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','POSTED','CANCELLED')),
+        scope TEXT NOT NULL DEFAULT 'ALL',
+        note TEXT,
+        items_counted INTEGER NOT NULL DEFAULT 0,
+        variance_qty INTEGER NOT NULL DEFAULT 0,
+        variance_value INTEGER NOT NULL DEFAULT 0,
+        created_by INTEGER,
+        username TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        posted_at TEXT,
+        posted_by TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_stock_counts_created ON stock_counts(created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS stock_count_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        count_id INTEGER NOT NULL REFERENCES stock_counts(id),
+        product_id INTEGER NOT NULL,
+        batch_id INTEGER,
+        sku TEXT NOT NULL,
+        name TEXT NOT NULL,
+        system_qty INTEGER NOT NULL,
+        counted_qty INTEGER,
+        variance INTEGER NOT NULL DEFAULT 0,
+        cost_price INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_stock_count_items_count ON stock_count_items(count_id);
+
+      /* Weighed sales record grams; this flag lets receipts print "1.500 kg". */
+      ALTER TABLE sale_items ADD COLUMN is_weighed INTEGER NOT NULL DEFAULT 0;
+
+      /* Alert window for near-expiry stock (pharmacy default 90 days). */
+      INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES
+        ('expiry_alert_days', '90', datetime('now')),
+        ('label_default_copies', '1', datetime('now'));
+    `
   }
 ];
 

@@ -1,5 +1,5 @@
 import type { Database } from '../db';
-import type { Product } from '../shared/types';
+import type { Money, Product } from '../shared/types';
 import { listProducts } from './products';
 import { listBatches } from './stock';
 
@@ -16,30 +16,46 @@ export interface ExpiryAlert {
 export interface StockAlerts {
   lowStock: Product[];
   expiring: ExpiryAlert[];
+  expired: ExpiryAlert[];
   outOfStock: Product[];
+  /** Cost value tied up in the batches that are already expired (kobo). */
+  expiredValue: Money;
+  expiryWindowDays: number;
 }
 
-export function listStockAlerts(db: Database, expiryWindowDays = 90): StockAlerts {
+/**
+ * Dashboard and inventory alerts. `trackedOnly` limits expiry alerts to products
+ * that opted into expiry tracking, which is how the supermarket edition treats
+ * perishables; the pharmacy edition tracks every batch.
+ */
+export function listStockAlerts(
+  db: Database,
+  expiryWindowDays = 90,
+  options: { trackedOnly?: boolean } = {}
+): StockAlerts {
   const lowStock = listProducts(db, { lowStock: true, limit: 2000 });
   const outOfStock = lowStock.filter((p) => p.stockQty <= 0);
   const today = new Date().toISOString().slice(0, 10);
   const limitDate = new Date(Date.now() + expiryWindowDays * 86_400_000).toISOString().slice(0, 10);
   const rows = db.handle
     .prepare(
-      `SELECT b.product_id, p.sku, p.name, b.batch_no, b.expiry_date, b.qty
+      `SELECT b.product_id, p.sku, p.name, p.cost_price, b.batch_no, b.expiry_date, b.qty
        FROM product_batches b JOIN products p ON p.id = b.product_id
        WHERE b.qty > 0 AND b.expiry_date IS NOT NULL AND b.expiry_date <= ?
+         ${options.trackedOnly ? 'AND p.expiry_tracking = 1' : ''}
        ORDER BY b.expiry_date ASC`
     )
     .all(limitDate) as {
     product_id: number;
     sku: string;
     name: string;
+    cost_price: number;
     batch_no: string;
     expiry_date: string;
     qty: number;
   }[];
-  const expiring: ExpiryAlert[] = rows.map((r) => ({
+  const costById = new Map(rows.map((row) => [row.product_id, row.cost_price]));
+  const allAlerts: ExpiryAlert[] = rows.map((r) => ({
     productId: r.product_id,
     sku: r.sku,
     name: r.name,
@@ -48,7 +64,17 @@ export function listStockAlerts(db: Database, expiryWindowDays = 90): StockAlert
     daysLeft: Math.ceil((Date.parse(r.expiry_date) - Date.parse(today)) / 86_400_000),
     qty: r.qty
   }));
-  return { lowStock, expiring, outOfStock };
+  const expired = allAlerts.filter((alert) => alert.daysLeft < 0);
+  const expiring = allAlerts.filter((alert) => alert.daysLeft >= 0);
+  const expiredValue = expired.reduce((sum, alert) => sum + alert.qty * (costById.get(alert.productId) ?? 0), 0);
+  return {
+    lowStock,
+    expiring,
+    expired,
+    outOfStock,
+    expiredValue: expiredValue as Money,
+    expiryWindowDays
+  };
 }
 
 export interface InventoryItem extends Product {
@@ -68,19 +94,21 @@ export function stockLedger(
   id: number;
   createdAt: string;
   type: string;
+  reasonType: string | null;
   qtyChange: number;
   note: string | null;
   reference: string | null;
 }[] {
   const rows = db.handle
     .prepare(
-      `SELECT id, created_at, type, qty_change, note, ref_type, ref_id
+      `SELECT id, created_at, type, reason_type, qty_change, note, ref_type, ref_id
        FROM stock_movements WHERE product_id = ? ORDER BY id DESC LIMIT ?`
     )
     .all(productId, Math.min(Math.max(limit, 1), 500)) as {
     id: number;
     created_at: string;
     type: string;
+    reason_type: string | null;
     qty_change: number;
     note: string | null;
     ref_type: string | null;
@@ -90,6 +118,7 @@ export function stockLedger(
     id: r.id,
     createdAt: r.created_at,
     type: r.type,
+    reasonType: r.reason_type,
     qtyChange: r.qty_change,
     note: r.note,
     reference: r.ref_type ? `${r.ref_type}#${r.ref_id ?? ''}` : null

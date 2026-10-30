@@ -93,8 +93,8 @@ export function buildSaleDocument(sale: Sale, store?: StoreProfile, productName 
         <td>${escapeHtml(item.name)}<br /><span class="meta">${escapeHtml(item.sku)}${
           item.batchNo ? ` &middot; batch ${escapeHtml(item.batchNo)}` : ''
         }</span></td>
-        <td class="num">${item.qty}</td>
-        <td class="num">${formatMoney(item.unitPrice)}</td>
+        <td class="num">${item.isWeighed ? `${(item.qty / 1000).toFixed(3)} kg` : item.qty}</td>
+        <td class="num">${formatMoney(item.unitPrice)}${item.isWeighed ? '<span class="meta">/kg</span>' : ''}</td>
         <td class="num">${formatMoney(item.lineTotal)}</td>
       </tr>`
     )
@@ -163,8 +163,8 @@ export function buildCreditNoteDocument(
       <tr>
         <td>${index + 1}</td>
         <td>${escapeHtml(item.name)}</td>
-        <td class="num">${item.qty}</td>
-        <td class="num">${formatMoney(item.unitPrice)}</td>
+        <td class="num">${item.isWeighed ? `${(item.qty / 1000).toFixed(3)} kg` : item.qty}</td>
+        <td class="num">${formatMoney(item.unitPrice)}${item.isWeighed ? '<span class="meta">/kg</span>' : ''}</td>
         <td class="num">${formatMoney(item.lineTotal)}</td>
       </tr>`
     )

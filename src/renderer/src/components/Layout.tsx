@@ -16,6 +16,8 @@ export type ViewKey =
   | 'products'
   | 'inventory'
   | 'stock'
+  | 'orders'
+  | 'stocktake'
   | 'batches'
   | 'departments'
   | 'promotions'
@@ -75,6 +77,22 @@ const NAV: NavItem[] = [
 
   /* ---------------- stock ---------------- */
   { key: 'stock', label: 'Stock & Purchases', icon: 'stock', group: 'Stock', permission: 'products.view' },
+  {
+    key: 'orders',
+    label: 'Purchase Orders',
+    icon: 'stock',
+    group: 'Stock',
+    permission: 'products.view',
+    feature: 'supermarket'
+  },
+  {
+    key: 'stocktake',
+    label: 'Stocktake',
+    icon: 'inventory',
+    group: 'Stock',
+    permission: 'stock.adjust',
+    feature: 'supermarket'
+  },
   { key: 'inventory', label: 'Inventory', icon: 'inventory', group: 'Stock', permission: 'products.view' },
   {
     key: 'batches',

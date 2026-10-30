@@ -478,3 +478,80 @@ here is DRM-grade:
 - The Windows NSIS installer still has to be built on Windows (see §25).
 - The smoke test seeds demo data and is not idempotent: it must run against a
   fresh `INFOFLEX_DATA_DIR`, and a second activation must use a new period.
+
+## 32. Phase 5 — products, packs and inventory control
+
+- **Stock is stored in one base unit; packs are a presentation layer.** A product
+  keeps `pack_size` (units per pack) and `pack_unit` (carton/crate/bale). Every
+  stock figure, sale line and ledger row is in base units, so the same product
+  can be received as cartons and sold as singles. `packsToUnits()` and
+  `unitsToPacks()` are the only conversions, and receiving with `packs` resolves
+  through the product's own pack size inside the main process — the renderer
+  never does the arithmetic.
+- **Weighed goods use integer grams.** `sale_items.qty` is an INTEGER, and money
+  is integer kobo, so a kilogram price times a weight in grams is the only way to
+  keep both exact: `line_total = round(qty_g × price_per_kg / 1000)`. Receiving
+  "2.5 kg" stores 2500; the POS basket stores grams; receipts print
+  `1.500 kg` because `sale_items.is_weighed` travels with the sale. This avoids
+  floating-point naira and the rounding drift that comes with it.
+- **Prices and costs are audited field by field.** `updateProduct` diffs every
+  money column (cost, retail, wholesale) and writes `product.update.price` with
+  `{ costPrice: {from,to}, price: {from,to}, wholesalePrice: {from,to} }`. If no
+  money moved the plain `product.update` row is written instead, so searching the
+  audit log for price changes is noise-free.
+- **Cost masking happens in `invoke()`, not in the renderer.** Any response to a
+  session without `products.manage` (i.e. everyone but the administrator) is run
+  through `redactCostsDeep`, which zeroes `costPrice`, `cost_price`, `costValue`,
+  `profit` and `margin` at any depth. A custom client cannot opt out, and the
+  products API still returns selling prices.
+- **Excel library choice: `exceljs`.** It writes and reads `.xlsx` without native
+  code (important for the offline, single-installer goal) and produces base64 we
+  can hand to the renderer or write straight into `data/exports`. CSV is parsed
+  by a small RFC-4180 reader of our own so a plain CSV never depends on the
+  workbook library. Import is deliberately two-step: `DRY_RUN` returns
+  `{validRows, created, updated, skipped, errors[], preview[]}`, and `IMPORT`
+  re-runs the same validation inside a transaction. Rows are matched to existing
+  products by SKU, then barcode, then exact name; unchanged rows are reported as
+  skipped rather than rewritten, so a re-import does not spam the audit log.
+- **Stocktake posts movements, never blind overwrites.** A count snapshots the
+  system quantity per product/batch, stores what was counted, and on posting
+  writes one `ADJUSTMENT` movement with `reason_type = 'COUNT'` per line. The
+  variance report is the same numbers before and after posting, and a posted
+  count cannot be posted twice (`CONFLICT`).
+- **Purchase orders and GRNs share the purchases table.** `status = DRAFT` means
+  an order that has not touched stock; receiving it posts stock, writes
+  `grn_no`/`received_at` and flips the row to `RECEIVED` in one transaction.
+  Ordering needs `prices.set` (it fixes the buying price) while receiving only
+  needs `stock.receive`, so a supervisor can receive goods without seeing costs.
+- **Price labels are HTML + inline SVG.** `code128Svg()` builds Code 128-B
+  rectangles with no external fonts or images, and `buildPriceLabels()` renders
+  an A4 sheet (3 × label grid, copies per product) that prints through the same
+  `print.document` path as receipts. Nothing leaves the machine.
+- **Edition gating stays in the main process.** `stocktake.*`, `labels.print` and
+  `purchases.*Order` carry `feature: 'supermarket'`; a pharmacy licence gets
+  `EDITION_RESTRICTED` even if the renderer calls them directly. Stocktake and
+  adjustments both require `stock.adjust`, which only the administrator holds.
+- **Alerts follow the edition, not a hard-coded window.** `stock.alerts` reads
+  `settings.expiry_alert_days` (seeded at 90) and, on a supermarket licence, only
+  considers products that opted into `expiry_tracking`. Expired batches are
+  returned separately so the UI can shout about them and still keep the normal
+  near-expiry list clean.
+- **Sub-categories reuse the categories table.** `categories.parent_id` gives a
+  department → sub-category tree without a second table; products already carry
+  `category_id`, so a product can sit anywhere in that tree while the free-text
+  `category` column stays available for quick entry.
+
+## 33. Known limitations after phase 5
+
+- Excel import reads the first sheet only, and images/formulas in the sheet are
+  flattened to their displayed value.
+- A stocktake covers the whole active catalogue (one row per product/batch);
+  counting a subset of the shop is not yet supported.
+- Weighed items are sold from a single batch pool — the FEFO batch split still
+  works, but a scale integration (serial/USB) is out of scope, so the weight is
+  typed or chosen from presets.
+- Price labels print on A4 sheets; dedicated label-printer templates (50 × 30 mm
+  rolls) would need a per-printer page size in Settings.
+- Import matching by exact name can merge two products that share a name across
+  different SKUs if the sheet leaves SKU and barcode blank — the dry run preview
+  shows this before anything is written.

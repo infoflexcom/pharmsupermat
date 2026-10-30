@@ -18,7 +18,7 @@ import {
 import { getAppState, completeSetup, getSetupStatus } from '../../services/app';
 import { authenticate, changePassword } from '../../services/auth';
 import { audit, listAudit } from '../../services/audit';
-import { getAllSettings, updateSettings } from '../../services/settings';
+import { getAllSettings, getNumericSetting, updateSettings } from '../../services/settings';
 import type { CompleteSetupInput, ProductInput } from '../../shared/types';
 import {
   createProduct,
@@ -30,6 +30,15 @@ import {
   updateProduct,
   findProductByCode
 } from '../../services/products';
+import { exportProducts, exportProductsXlsx, exportTemplate, importProducts } from '../../services/imports';
+import { buildPriceLabels } from '../../services/labels';
+import {
+  createStockCount,
+  getStockCount,
+  listStockCounts,
+  postStockCount,
+  saveStockCountEntries
+} from '../../services/stocktake';
 import { adjustStock, listBatches } from '../../services/stock';
 import { listInventory, listStockAlerts, stockLedger } from '../../services/inventory';
 import {
@@ -59,7 +68,16 @@ import {
   type CustomerInput,
   type SupplierInput
 } from '../../services/directory';
-import { createPurchase, getPurchase, listPurchases, type PurchaseInput } from '../../services/purchases';
+import {
+  cancelPurchaseOrder,
+  createPurchase,
+  createPurchaseOrder,
+  getPurchase,
+  listPurchases,
+  receivePurchaseOrder,
+  type PurchaseInput,
+  type PurchaseOrderInput
+} from '../../services/purchases';
 import { closeDay, computeDayTotals, listDayClosings } from '../../services/operations';
 import { getDashboard } from '../../services/dashboard';
 import {
@@ -104,7 +122,8 @@ function editionSafeProduct(input: ProductInput, features: FeatureFlags): Produc
     pluCode: features.supermarket ? input.pluCode : null,
     pricePerKg: features.supermarket ? input.pricePerKg : null,
     isWeighed: features.supermarket ? input.isWeighed : false,
-    openingExpiry: features.pharmacy ? input.openingExpiry : null
+    expiryTracking: features.pharmacy ? true : features.supermarket ? input.expiryTracking : false,
+    openingExpiry: features.pharmacy || features.supermarket ? input.openingExpiry : null
   };
 }
 
@@ -407,6 +426,61 @@ export const CORE_HANDLERS: Handler[] = [
     }
   },
 
+  {
+    channel: 'products.import',
+    permission: 'products.manage',
+    handler: async (args) => {
+      const session = requireSession(args);
+      const input = payloadOf<{
+        filename: string;
+        data: string;
+        encoding: 'base64' | 'utf8';
+        mode: 'DRY_RUN' | 'IMPORT';
+      }>(args);
+      return importProducts(
+        args.ctx.db,
+        { filename: input.filename, data: input.data, encoding: input.encoding },
+        {
+          mode: input.mode === 'IMPORT' ? 'IMPORT' : 'DRY_RUN',
+          features: { pharmacy: args.features.pharmacy, supermarket: args.features.supermarket }
+        },
+        actor(session)
+      );
+    }
+  },
+  {
+    channel: 'products.exportTemplate',
+    permission: 'products.manage',
+    handler: (args) =>
+      exportTemplate({ pharmacy: args.features.pharmacy, supermarket: args.features.supermarket })
+  },
+  {
+    channel: 'products.export',
+    permission: 'products.manage',
+    handler: async (args) => {
+      const { format } = (payloadOf<{ format?: 'CSV' | 'XLSX' }>(args) ?? {}) as { format?: 'CSV' | 'XLSX' };
+      return format === 'XLSX' ? exportProductsXlsx(args.ctx.db) : exportProducts(args.ctx.db);
+    }
+  },
+  {
+    // Bulk price labels are a supermarket workflow; printing them never changes data.
+    channel: 'labels.print',
+    permission: 'products.view',
+    feature: 'supermarket',
+    handler: (args) => {
+      const session = requireSession(args);
+      return buildPriceLabels(
+        args.ctx.db,
+        payloadOf<Parameters<typeof buildPriceLabels>[1]>(args) ?? {},
+        actor(session),
+        (() => {
+          const store = getStoreProfile(args.ctx.db);
+          return { name: store.storeName, address: store.storeAddress, phone: store.storePhone };
+        })()
+      );
+    }
+  },
+
   /* ---------------- stock ---------------- */
   {
     channel: 'stock.batches',
@@ -431,33 +505,68 @@ export const CORE_HANDLERS: Handler[] = [
     }
   },
   {
+    // Only an administrator holds stock.adjust; the service records the reason
+    // in the ledger and the audit trail in the same transaction.
     channel: 'stock.adjust',
     permission: 'stock.adjust',
     handler: (args) => {
       const session = requireSession(args);
-      const input = payloadOf<{ productId: number; batchId?: number; newQty: number; reason: string }>(
-        args
-      );
-      return args.ctx.db.transaction(() => {
-        adjustStock(args.ctx.db, input, actor(session));
-        audit(args.ctx.db, {
-          action: 'stock.adjust',
-          entity: 'product',
-          entityId: input.productId,
-          userId: session.userId,
-          username: session.username,
-          severity: 'WARN',
-          details: input
-        });
-        return listBatches(args.ctx.db, input.productId);
-      });
+      const input = payloadOf<Parameters<typeof adjustStock>[1]>(args);
+      const result = adjustStock(args.ctx.db, input, actor(session));
+      return { ...result, batches: listBatches(args.ctx.db, input.productId) };
     }
+  },
+  {
+    // Stocktake (count sheet + variance report) is a supermarket workflow.
+    channel: 'stocktake.list',
+    permission: 'stock.adjust',
+    feature: 'supermarket',
+    handler: (args) => listStockCounts(args.ctx.db, payloadOf<{ limit?: number }>(args)?.limit ?? 40)
+  },
+  {
+    channel: 'stocktake.get',
+    permission: 'stock.adjust',
+    feature: 'supermarket',
+    handler: (args) => getStockCount(args.ctx.db, payloadOf<{ id: number }>(args).id)
+  },
+  {
+    channel: 'stocktake.create',
+    permission: 'stock.adjust',
+    feature: 'supermarket',
+    handler: (args) =>
+      createStockCount(
+        args.ctx.db,
+        payloadOf<{ note?: string; scope?: string }>(args) ?? {},
+        actor(requireSession(args))
+      )
+  },
+  {
+    channel: 'stocktake.save',
+    permission: 'stock.adjust',
+    feature: 'supermarket',
+    handler: (args) =>
+      saveStockCountEntries(
+        args.ctx.db,
+        payloadOf<{ countId: number; entries: Array<{ itemId: number; countedQty: number | null }> }>(args),
+        actor(requireSession(args))
+      )
+  },
+  {
+    channel: 'stocktake.post',
+    permission: 'stock.adjust',
+    feature: 'supermarket',
+    handler: (args) =>
+      postStockCount(args.ctx.db, payloadOf<{ countId: number }>(args), actor(requireSession(args)))
   },
   {
     channel: 'stock.alerts',
     permission: 'products.view',
-    handler: (args) =>
-      listStockAlerts(args.ctx.db, args.features.pharmacy ? 90 : 0)
+    handler: (args) => {
+      // Pharmacy tracks every batch; the supermarket only alerts on perishables
+      // that opted into expiry tracking. The window comes from settings.
+      const days = getNumericSetting(args.ctx.db, 'expiry_alert_days', 90);
+      return listStockAlerts(args.ctx.db, days, { trackedOnly: !args.features.pharmacy });
+    }
   },
   {
     channel: 'stock.ledger',
@@ -473,7 +582,7 @@ export const CORE_HANDLERS: Handler[] = [
     channel: 'inventory.expiryWatch',
     permission: 'products.view',
     feature: 'pharmacy',
-    handler: (args) => listStockAlerts(args.ctx.db, 90)
+    handler: (args) => listStockAlerts(args.ctx.db, getNumericSetting(args.ctx.db, 'expiry_alert_days', 90))
   },
   {
     channel: 'prescriptions.log',
@@ -553,6 +662,41 @@ export const CORE_HANDLERS: Handler[] = [
       }));
       return createPurchase(args.ctx.db, { ...input, items }, actor(requireSession(args)));
     }
+  },
+  {
+    // Supplier purchase orders and goods-received notes (supermarket module).
+    // Ordering fixes the buying prices, so it stays with the administrator;
+    // receiving what was ordered only needs stock.receive.
+    channel: 'purchases.createOrder',
+    permission: 'prices.set',
+    feature: 'supermarket',
+    handler: (args) => {
+      const input = payloadOf<PurchaseOrderInput>(args);
+      const items = (input.items ?? []).map((item) => ({
+        ...item,
+        batchNo: args.features.pharmacy ? item.batchNo : undefined,
+        expiryDate: args.features.pharmacy ? item.expiryDate : null
+      }));
+      return createPurchaseOrder(args.ctx.db, { ...input, items }, actor(requireSession(args)));
+    }
+  },
+  {
+    channel: 'purchases.receiveOrder',
+    permission: 'stock.receive',
+    feature: 'supermarket',
+    handler: (args) =>
+      receivePurchaseOrder(
+        args.ctx.db,
+        payloadOf<{ id: number; invoiceNo?: string; purchaseDate?: string; note?: string }>(args),
+        actor(requireSession(args))
+      )
+  },
+  {
+    channel: 'purchases.cancelOrder',
+    permission: 'stock.receive',
+    feature: 'supermarket',
+    handler: (args) =>
+      cancelPurchaseOrder(args.ctx.db, payloadOf<{ id: number }>(args).id, actor(requireSession(args)))
   },
 
   /* ---------------- day closing ---------------- */
@@ -734,7 +878,8 @@ export const CORE_HANDLERS: Handler[] = [
       const canSeeAll = session.permissions.includes('reports.view.all');
       return getDashboard(args.ctx.db, {
         scopeUserId: canSeeAll ? undefined : session.userId,
-        expiryWindowDays: args.features.pharmacy ? 90 : 0
+        expiryWindowDays: getNumericSetting(args.ctx.db, 'expiry_alert_days', 90),
+        trackedOnly: !args.features.pharmacy
       });
     }
   },
@@ -882,6 +1027,33 @@ export const CORE_HANDLERS: Handler[] = [
         entityId: safe,
         userId: args.session?.userId ?? null,
         username: args.session?.username ?? null
+      });
+      return { path };
+    }
+  },
+  {
+    // Writes an exported file (CSV text or base64 workbook) into the data
+    // folder's exports directory and returns its path.
+    channel: 'documents.saveExport',
+    handler: (args) => {
+      const session = requireSession(args);
+      const { filename, data, encoding } = payloadOf<{
+        filename: string;
+        data: string;
+        encoding: 'base64' | 'utf8';
+      }>(args);
+      if (!data || !filename) throw validation('Nothing to export.');
+      const exportsDir = join(args.ctx.dataDir, 'exports');
+      mkdirSync(exportsDir, { recursive: true });
+      const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+      const path = join(exportsDir, safe);
+      writeFileSync(path, encoding === 'base64' ? Buffer.from(data, 'base64') : data, encoding === 'base64' ? undefined : 'utf8');
+      audit(args.ctx.db, {
+        action: 'document.export',
+        entity: 'document',
+        entityId: safe,
+        userId: session.userId,
+        username: session.username
       });
       return { path };
     }

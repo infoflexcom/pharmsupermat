@@ -10,7 +10,7 @@ Infoflex keeps everything in one SQLite file inside the OS application-data fold
 
 Set `INFOFLEX_DATA_DIR` to override the folder (the browser preview and the smoke test do this).
 
-Schema version: **4** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy, v4 licence_periods_hmac_and_attempt_throttle.
+Schema version: **5** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy, v4 licence_periods_hmac_and_attempt_throttle, v5 product_packs_brands_stock_counts_and_grn.
 
 ## Rules that apply to every table
 
@@ -25,7 +25,7 @@ Schema version: **4** (`PRAGMA user_version`), migrations: v1 initial, v2 shared
 
 - **Shared (all editions):** `users`, `roles`, `settings`, `audit_log`, `license_state`, `license_history`, `license_attempts`, `license_guard`, `categories`, `suppliers`, `customers`, `products`, `stock_movements`, `sales`, `sale_items`, `payments`, `returns`, `return_items`, `purchases`, `purchase_items`, `day_closings`, `counters`, `sessions_meta`
 - **Pharmacy module:** `product_batches`
-- **Supermarket module:** `departments`, `promotions`, `price_rules`, `loyalty_members`, `loyalty_transactions`, `cashier_shifts`, `cash_drawer_events`, `product_barcodes`, `product_variants`
+- **Supermarket module:** `stock_counts`, `stock_count_items`, `departments`, `promotions`, `price_rules`, `loyalty_members`, `loyalty_transactions`, `cashier_shifts`, `cash_drawer_events`, `product_barcodes`, `product_variants`
 
 Edition tables are created by the migration (a shop that later upgrades from pharmacy to pharmacy+supermarket keeps its data), but the main process only mounts a module's IPC channels when the signed licence enables it — see `handlerMapFor()` in `src/main/api/registry.ts`.
 
@@ -181,6 +181,9 @@ Product categories; products.category keeps a denormalised display name.
 | `active` | INTEGER | NOT NULL | `1` |  |
 | `created_at` | TEXT | NOT NULL | — |  |
 | `updated_at` | TEXT | NOT NULL | — |  |
+| `parent_id` | INTEGER | yes | — |  |
+
+Indexes: `idx_categories_parent`
 
 ### `suppliers`
 
@@ -247,6 +250,11 @@ Catalogue: prices in kobo, stock reorder level, pharmacy and supermarket extensi
 | `plu_code` | TEXT | yes | — |  |
 | `price_per_kg` | INTEGER | yes | — |  |
 | `is_weighed` | INTEGER | NOT NULL | `0` |  |
+| `brand` | TEXT | yes | — |  |
+| `pack_size` | INTEGER | NOT NULL | `1` |  |
+| `pack_unit` | TEXT | NOT NULL | `'pack'` |  |
+| `wholesale_min_qty` | INTEGER | NOT NULL | `1` |  |
+| `expiry_tracking` | INTEGER | NOT NULL | `0` |  |
 
 Indexes: `idx_products_barcode`, `idx_products_category`, `idx_products_department`, `idx_products_name`, `idx_products_plu`
 
@@ -266,8 +274,9 @@ Stock ledger: every purchase, sale, return, void and adjustment with reference a
 | `note` | TEXT | yes | — |  |
 | `user_id` | INTEGER | yes | — |  |
 | `created_at` | TEXT | NOT NULL | — |  |
+| `reason_type` | TEXT | yes | — |  |
 
-Indexes: `idx_moves_product`, `idx_moves_ref`
+Indexes: `idx_moves_product`, `idx_moves_ref`, `idx_moves_type`
 
 ### `sales`
 
@@ -329,6 +338,7 @@ Immutable line snapshots: SKU, name, qty, price, cost, batch.
 | `batch_id` | INTEGER | yes | — |  |
 | `batch_no` | TEXT | yes | — |  |
 | `rx_required` | INTEGER | NOT NULL | `0` |  |
+| `is_weighed` | INTEGER | NOT NULL | `0` |  |
 
 Indexes: `idx_sale_items_product`, `idx_sale_items_sale`
 
@@ -413,6 +423,9 @@ Supplier purchase headers (received stock).
 | `user_id` | INTEGER | yes | — |  |
 | `username` | TEXT | yes | — |  |
 | `created_at` | TEXT | NOT NULL | — |  |
+| `grn_no` | TEXT | yes | — |  |
+| `received_at` | TEXT | yes | — |  |
+| `ordered_at` | TEXT | yes | — |  |
 
 Indexes: `idx_purchases_date`, `idx_purchases_supplier`
 
@@ -497,6 +510,49 @@ Batch/expiry stock engine (batch no, expiry, qty, cost). Supermarket uses a sing
 Indexes: `idx_batches_expiry`, `idx_batches_product`, `idx_batches_unique`
 
 ## Supermarket module tables
+
+### `stock_counts`
+
+Stocktake header: draft/posted counts with variance totals.
+
+| Column | Type | Null | Default | Key |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes | — | PK |
+| `count_no` | TEXT | NOT NULL | — |  |
+| `status` | TEXT | NOT NULL | `'DRAFT'` |  |
+| `scope` | TEXT | NOT NULL | `'ALL'` |  |
+| `note` | TEXT | yes | — |  |
+| `items_counted` | INTEGER | NOT NULL | `0` |  |
+| `variance_qty` | INTEGER | NOT NULL | `0` |  |
+| `variance_value` | INTEGER | NOT NULL | `0` |  |
+| `created_by` | INTEGER | yes | — |  |
+| `username` | TEXT | NOT NULL | — |  |
+| `created_at` | TEXT | NOT NULL | — |  |
+| `posted_at` | TEXT | yes | — |  |
+| `posted_by` | TEXT | yes | — |  |
+
+Indexes: `idx_stock_counts_created`
+
+### `stock_count_items`
+
+Counted quantity per product/batch with the system quantity and variance.
+
+| Column | Type | Null | Default | Key |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes | — | PK |
+| `count_id` | INTEGER | NOT NULL | — |  |
+| `product_id` | INTEGER | NOT NULL | — |  |
+| `batch_id` | INTEGER | yes | — |  |
+| `sku` | TEXT | NOT NULL | — |  |
+| `name` | TEXT | NOT NULL | — |  |
+| `system_qty` | INTEGER | NOT NULL | — |  |
+| `counted_qty` | INTEGER | yes | — |  |
+| `variance` | INTEGER | NOT NULL | `0` |  |
+| `cost_price` | INTEGER | NOT NULL | `0` |  |
+| `created_at` | TEXT | NOT NULL | — |  |
+| `updated_at` | TEXT | NOT NULL | — |  |
+
+Indexes: `idx_stock_count_items_count`
 
 ### `departments`
 
@@ -688,6 +744,7 @@ applies every newer migration inside a transaction (rollback on error) and bumps
 | 2 | shared_catalogue_partners_documents_and_edition_modules |
 | 3 | account_lockout_store_profile_and_idle_policy |
 | 4 | licence_periods_hmac_and_attempt_throttle |
+| 5 | product_packs_brands_stock_counts_and_grn |
 
 To add a migration: append a `{ version, name, sql }` entry, add any new table/column to
 `src/db/schema.ts`, run `npm run db:verify` (writes and reads a row in every table, checks the
@@ -700,4 +757,4 @@ manifest against the database) and `npm run db:schema` to refresh this page.
 SELECT 'sales', COUNT(*) FROM sales UNION ALL SELECT 'products', COUNT(*) FROM products;
 ```
 
-_33 tables documented; generated 2026-10-30T15:34:36.559Z by scripts/gen-schema-doc.ts._
+_35 tables documented; generated 2026-10-30T21:49:14.815Z by scripts/gen-schema-doc.ts._

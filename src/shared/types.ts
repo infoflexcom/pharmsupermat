@@ -227,11 +227,18 @@ export interface Product {
   sku: string;
   barcode: string | null;
   name: string;
+  brand: string | null;
   category: string | null;
   unit: string;
+  /** How many base units one pack/carton contains (1 when not packed). */
+  packSize: number;
+  /** What the pack is called: carton, pack, crate… */
+  packUnit: string;
   costPrice: Money;
   price: Money;
   wholesalePrice: Money;
+  /** Wholesale pricing only applies from this many units. */
+  wholesaleMinQty: number;
   reorderLevel: number;
   rxRequired: boolean;
   active: boolean;
@@ -247,6 +254,8 @@ export interface Product {
   pluCode: string | null;
   pricePerKg: Money | null;
   isWeighed: boolean;
+  /** Perishables opt in to expiry tracking and near-expiry alerts. */
+  expiryTracking: boolean;
   /* ---- shared ---- */
   supplierId: number | null;
   createdAt: string;
@@ -268,12 +277,17 @@ export interface ProductInput {
   sku?: string;
   barcode?: string | null;
   name: string;
+  brand?: string | null;
   category?: string | null;
   unit?: string;
+  packSize?: number;
+  packUnit?: string;
   costPrice: Money;
   price: Money;
   wholesalePrice?: Money;
+  wholesaleMinQty?: number;
   reorderLevel?: number;
+  expiryTracking?: boolean;
   rxRequired?: boolean;
   openingStock?: number;
   openingBatchNo?: string;
@@ -293,11 +307,121 @@ export interface ProductInput {
 
 export interface StockReceiveInput {
   productId: number;
-  qty: number;
+  /** Base units received (packs are converted by `packs` below). */
+  qty?: number;
+  /** Packs received; multiplied by the product's pack size. */
+  packs?: number;
   batchNo?: string;
   expiryDate?: string | null;
   costPrice?: Money;
   note?: string;
+  /** Weighed products: kilograms received, converted to grams internally. */
+  weightKg?: number;
+}
+
+export type StockAdjustReason = 'DAMAGED' | 'LOST' | 'CORRECTION' | 'COUNT';
+
+export interface StockAdjustInput {
+  productId: number;
+  batchId?: number;
+  /** New base-unit quantity for the batch (used by CORRECTION/COUNT). */
+  newQty?: number;
+  /** Quantity removed (used by DAMAGED/LOST). */
+  removeQty?: number;
+  reason: string;
+  reasonType: StockAdjustReason;
+}
+
+/* ------------------------------------------------------------------ */
+/* Stock counts (stocktake)                                            */
+/* ------------------------------------------------------------------ */
+
+export interface StockCountRow {
+  id: number;
+  count_no: string;
+  status: 'DRAFT' | 'POSTED' | 'CANCELLED';
+  scope: string;
+  note: string | null;
+  items_counted: number;
+  variance_qty: number;
+  variance_value: Money;
+  username: string;
+  created_at: string;
+  posted_at: string | null;
+  posted_by: string | null;
+}
+
+export interface StockCountItemRow {
+  id: number;
+  count_id: number;
+  product_id: number;
+  batch_id: number | null;
+  sku: string;
+  name: string;
+  system_qty: number;
+  counted_qty: number | null;
+  variance: number;
+  cost_price: Money;
+}
+
+export interface StockCountDetail {
+  count: StockCountRow;
+  items: StockCountItemRow[];
+  totals: { counted: number; varianceQty: number; varianceValue: Money };
+}
+
+/* ------------------------------------------------------------------ */
+/* Purchases: orders and goods-received notes                          */
+/* ------------------------------------------------------------------ */
+
+export interface PurchaseOrderInput {
+  supplierId?: number | null;
+  supplierName?: string | null;
+  invoiceNo?: string | null;
+  purchaseDate?: string;
+  note?: string;
+  items: Array<{
+    productId: number;
+    qty: number;
+    costPrice: Money;
+    batchNo?: string;
+    expiryDate?: string | null;
+  }>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Product import / export and price labels                            */
+/* ------------------------------------------------------------------ */
+
+export type ImportRowError = { row: number; field: string; message: string };
+
+export interface ProductImportResult {
+  mode: 'DRY_RUN' | 'IMPORT';
+  totalRows: number;
+  validRows: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: ImportRowError[];
+  /** First few parsed rows, for the on-screen preview. */
+  preview: Array<{ row: number; name: string; sku: string; price: Money; action: 'CREATE' | 'UPDATE' }>;
+}
+
+export interface ProductExportFile {
+  filename: string;
+  /** base64 for xlsx, utf8 text for csv. */
+  data: string;
+  encoding: 'base64' | 'utf8';
+  rows: number;
+}
+
+export interface PriceLabelOptions {
+  productIds?: number[];
+  copies?: number;
+  showBarcode?: boolean;
+  showPrice?: boolean;
+  showName?: boolean;
+  title?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -347,6 +471,8 @@ export interface SaleItem {
   batchId: number | null;
   batchNo: string | null;
   rxRequired: boolean;
+  /** Weighed line: qty is grams and the unit price is per kilogram. */
+  isWeighed: boolean;
 }
 
 export interface Sale {
@@ -428,6 +554,8 @@ export interface ReturnLine {
   lineTotal: Money;
   batchId: number | null;
   restock: boolean;
+  /** Weighed line: qty is grams and the unit price is per kilogram. */
+  isWeighed: boolean;
 }
 
 export interface SaleReturn {

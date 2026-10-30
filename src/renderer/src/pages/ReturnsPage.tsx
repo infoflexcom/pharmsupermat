@@ -28,7 +28,12 @@ interface LineState {
   alreadyReturned: number;
   unitPrice: number;
   qty: number;
+  isWeighed: boolean;
 }
+
+/** Weighed lines are priced per kilogram and returned in grams. */
+const lineMoney = (line: { qty: number; unitPrice: number; isWeighed: boolean }): number =>
+  line.isWeighed ? Math.round((line.qty * line.unitPrice) / 1000) : line.qty * line.unitPrice;
 
 export default function ReturnsPage() {
   const api = useApi();
@@ -101,13 +106,14 @@ export default function ReturnsPage() {
         soldQty: item.qty,
         alreadyReturned: returned.get(item.id) ?? 0,
         unitPrice: item.unitPrice,
-        qty: 0
+        qty: 0,
+        isWeighed: item.isWeighed
       }))
     );
     setReason('');
   }
 
-  const total = lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0);
+  const total = lines.reduce((sum, line) => sum + lineMoney(line), 0);
   // Hint only — the server re-checks the limit and the return window on submit.
   const overLimit = settings ? total > settings.returnLimit : false;
 
@@ -273,7 +279,7 @@ export default function ReturnsPage() {
                       key: 'amount',
                       label: 'Credit',
                       align: 'right',
-                      render: (r) => <Money value={r.qty * r.unitPrice} />
+                      render: (r) => <Money value={lineMoney(r)} />
                     }
                   ]}
                   empty="No items on this receipt."

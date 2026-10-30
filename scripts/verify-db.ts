@@ -19,7 +19,8 @@ import { ALL_PERMISSIONS } from '../src/shared/permissions';
 import { featuresForEdition } from '../src/shared/editions';
 import { createFirstAdmin } from '../src/services/users';
 import { getAllSettings, getStoreProfile, updateSettings } from '../src/services/settings';
-import { createProduct } from '../src/services/products';
+import { createProduct, packsToUnits, redactCostsDeep } from '../src/services/products';
+import { createStockCount, postStockCount, saveStockCountEntries } from '../src/services/stocktake';
 import { createSale } from '../src/services/sales';
 import { createReturn, approveReturn } from '../src/services/returns';
 import { createPurchase } from '../src/services/purchases';
@@ -246,6 +247,30 @@ function main(): number {
     check('day closing variance computed', closing.variance === closing.counted_cash - closing.expected_cash);
     check('document counter advanced', Boolean(getAllSettings(db).storeName));
     nextDocumentNumber(db, 'VERIFY');
+
+    /* ---- stocktake: count, variance, post ---- */
+    const count = createStockCount(db, { note: 'Verification count' }, actor);
+    check('stock count snapshots lines', count.items.length > 0, `got ${count.items.length}`);
+    const countedLine = count.items[0];
+    const saved = saveStockCountEntries(
+      db,
+      {
+        countId: count.count.id,
+        entries: [{ itemId: countedLine.id, countedQty: countedLine.system_qty + 3 }]
+      },
+      actor
+    );
+    check('count variance recorded', saved.totals.varianceQty === 3, `got ${saved.totals.varianceQty}`);
+    const posted = postStockCount(db, { countId: count.count.id }, actor);
+    check('count posted as adjustments', posted.count.status === 'POSTED');
+
+    /* ---- pack conversion and cost redaction ---- */
+    check('packs convert to base units', packsToUnits(4, 12) === 48);
+    const masked = redactCostsDeep({ costPrice: 5_000, price: 7_000 }, false) as {
+      costPrice: number;
+      price: number;
+    };
+    check('cost redaction keeps selling price', masked.costPrice === 0 && masked.price === 7_000);
 
     /* ---- every table has at least one row ---- */
     const rows: Array<{ table: string; rows: number }> = [];

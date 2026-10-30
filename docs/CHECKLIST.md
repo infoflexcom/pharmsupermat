@@ -266,3 +266,67 @@ Verified on the same headless Linux sandbox.
 - `npm run smoke` — **32/32** passed on a fresh data directory.
 - `npm run build` — main 165 kB (minified), preload 0.64 kB, renderer 932 kB.
 - `VENDOR_MASTER_PASSWORD=… npm run verify:secrets` — PASS.
+
+---
+
+# Phase 5 verification — product and inventory management
+
+## Requirement checklist (both editions)
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Admin adds, edits and imports products; everyone else views only | ✅ | `products.manage` is Administrator-only (`src/shared/permissions.ts`); `tests/products-inventory.test.ts` shows a cashier's `products.update` returning `FORBIDDEN`; the renderer hides Add/Edit/Import/Export unless `products.manage` |
+| Name, brand, category, barcode/SKU, unit and pack size | ✅ | Products form + `products.brand/pack_size/pack_unit` (migration v5); API test asserts brand/pack survive a round trip |
+| Automatic pack-to-unit conversion | ✅ | `packsToUnits()` / `unitsToPacks()` in `src/services/products.ts`; receiving 3 packs of 12 adds 36 units (test + smoke "pack-aware stock receipt"); the receive dialog offers packs *or* loose units |
+| Cost, retail, wholesale price and wholesale minimum quantity | ✅ | Form fields, `wholesale_min_qty` column, validation (≥ 1), wholesale price shown with its "from N" threshold |
+| Reorder level | ✅ | Existing column kept; the products table flags low/out-of-stock rows and the dashboard counts them |
+| Only Admin sets/changes prices and cost | ✅ | `products.manage` + `prices.set` are Administrator-only; supervisors keep `prices.override` (POS-only, audited as `price_override_by`) |
+| Every price/cost change logged with old and new values | ✅ | `updateProduct` diffs each money field and writes `product.update.price` with `{price, wholesalePrice, costPrice}` `{from,to}`; guarded by `tests/guards.test.ts` |
+| Bulk CSV/Excel import with validation and an error report | ✅ | `src/services/imports.ts` (exceljs for `.xlsx`, own RFC-4180 reader for CSV) → `DRY_RUN` then `IMPORT`; report shows created/updated/skipped and per-row `{row, field, message}`; tests cover a bad row, a duplicate SKU row and a clean import |
+| Export products | ✅ | `products.export` returns CSV (utf8) or XLSX (base64); `products.exportTemplate` hands back the exact headings; desktop writes them to `data/exports`, the browser downloads them |
+| Search by name or barcode | ✅ | `products.list` search covers name, SKU, barcode, category, generic name, PLU and every extra barcode |
+| Purchases / stock-in from suppliers | ✅ | `purchases.create` (receive immediately) plus `purchases.createOrder` → `receiveOrder` (GRN) for the supermarket module |
+| Stock adjustments (damaged/lost/correction) with a mandatory reason, Admin only | ✅ | `adjustStock` rejects an empty reason (`VALIDATION`), writes `reason_type` into the ledger and audit; `stock.adjust` is Admin-only — a supervisor gets `FORBIDDEN` (test) |
+| Cost prices hidden from non-Admin roles | ✅ | `invoke()` runs every response for a session without `products.manage` through `redactCostsDeep`; test asserts `costPrice === 0` while `price` is intact; the UI also hides the Cost column and stock value KPI |
+| Low-stock alerts on the dashboard | ✅ | Dashboard KPIs + alert banner (already present) now backed by `stock.alerts` with the configurable expiry window |
+
+## Pharmacy module
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Generic name, prescription-only flag | ✅ | Form fields; `prescriptions` feature strips the Rx flag on non-pharmacy licences |
+| Batch and expiry tracking, FEFO selling, expired stock blocked | ✅ | Unchanged from phase 3 and still covered by `tests/pos-sales.test.ts` ("sells first-expiry-first-out and never sells expired stock") |
+| Near-expiry alerts, default 90 days | ✅ | `settings.expiry_alert_days` (seeded 90) drives `stock.alerts`; a 20-day expiry appears in `expiring` (test) |
+
+## Supermarket module
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Departments and sub-categories | ✅ | `mart.departments.*` pages plus `categories.parent_id` for a parent → child tree |
+| Shelf/aisle location | ✅ | `products.shelf_location` field on the product form |
+| Multiple barcodes per product | ✅ | Extra-barcodes editor in the product modal backed by `mart.barcodes.add/remove/list`; lookup searches all of them |
+| Product variants (size/flavour) | ✅ | Variant table + add form in the product modal backed by `mart.variants.save/list` |
+| Weighed items: PLU, price per kg, scale or manual weight | ✅ | `products.plu_code/price_per_kg/is_weighed`; POS opens a weigh dialog (typed kg + presets), stores grams, prints `1.500 kg` on the receipt (test asserts ₦1,800.00 for 1.5 kg at ₦1,200/kg) |
+| Optional expiry for perishables with alerts | ✅ | `products.expiry_tracking` + `stock.alerts(trackedOnly)` so only opted-in products raise near-expiry alerts |
+| Stock counts (stocktake) with a variance report | ✅ | `stocktake.create/save/post` + `StocktakePage`; posting writes one `ADJUSTMENT … reason_type = 'COUNT'` per line and stores variance qty/value (API test + live supermarket walk-through) |
+| Supplier purchase orders and goods-received notes | ✅ | `purchases.createOrder` (DRAFT, no stock) → `purchases.receiveOrder` (stock + `GRN-000001`); cancelling a draft touches nothing (tests) |
+| Bulk price-label printing (barcode labels) | ✅ | `labels.print` → A4 sheet of labels with an inline Code 128 SVG, copies per product, printable/saveable through `DocumentView` (test counts the label blocks and finds the barcode) |
+
+## DONE WHEN
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| Products can be imported | ✅ | Dry run → import → re-import (updates, no duplicates) in `tests/products-inventory.test.ts` and smoke "bulk import" |
+| Stock can be received | ✅ | By unit, by pack (× pack size) and by weight (kg → grams); packs/weights tested and smoke-tested |
+| Alerts visible for the active edition | ✅ | Pharmacy: expiring/expired batches. Supermarket: tracked perishables + low stock; the Inventory page has Low stock / Near expiry / Expired tabs |
+| A non-Admin cannot edit prices or see costs | ✅ | `FORBIDDEN` on `products.update`, `costPrice === 0` for cashier *and* supervisor, and smoke "cost prices are hidden from non-admin roles" |
+
+## Verification run
+
+- `npm run typecheck` — clean (node + web).
+- `VENDOR_MASTER_PASSWORD=... npm test` — 14 files, **122 tests passed**.
+- `npm run db:verify` — **165 checks, 0 failed** (35 tables, every table written and read back, including `stock_counts` and `stock_count_items`).
+- `VENDOR_MASTER_PASSWORD=... npm run verify:secrets` — PASS (141 files scanned).
+- `BASE_URL=... npm run smoke` (fresh data dir) — **36/36 passed**, including import, export/template, pack receipt, reasoned adjustment and cost masking.
+- Live supermarket walk-through on the browser harness (licence SUPERMARKET, seeded demo): weighed sale ₦1,800.00 for 1.500 kg, 2 labels on the sheet with a barcode SVG, stocktake variance −4 posted, PO-000001 received as GRN-000001, CSV export of 6 products.
+- `npm run build` — main 201.94 kB, preload 0.64 kB, renderer 996.54 kB + 30.18 kB CSS.

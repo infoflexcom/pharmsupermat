@@ -14,6 +14,8 @@ import ProductsPage from './pages/ProductsPage';
 import InventoryPage from './pages/InventoryPage';
 import CustomersPage from './pages/CustomersPage';
 import StockPage from './pages/StockPage';
+import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
+import StocktakePage from './pages/StocktakePage';
 import BatchesPage from './pages/BatchesPage';
 import DepartmentsPage from './pages/DepartmentsPage';
 import PromotionsPage from './pages/PromotionsPage';
@@ -78,6 +80,8 @@ export default function App() {
       {view === 'inventory' ? <InventoryPage /> : null}
       {view === 'customers' ? <CustomersPage /> : null}
       {view === 'stock' ? <StockPage /> : null}
+      {view === 'orders' ? <PurchaseOrdersPage /> : null}
+      {view === 'stocktake' ? <StocktakePage /> : null}
       {view === 'batches' ? <BatchesPage /> : null}
       {view === 'departments' ? <DepartmentsPage /> : null}
       {view === 'promotions' ? <PromotionsPage /> : null}

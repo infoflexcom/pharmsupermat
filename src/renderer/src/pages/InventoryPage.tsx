@@ -23,10 +23,22 @@ interface InventoryItem extends Product {
   batches: Batch[];
 }
 
+interface ExpiryRow {
+  productId: number;
+  sku: string;
+  name: string;
+  batchNo: string;
+  expiryDate: string;
+  daysLeft: number;
+  qty: number;
+}
+
 interface Alerts {
   lowStock: Product[];
-  expiring: { productId: number; sku: string; name: string; batchNo: string; expiryDate: string; daysLeft: number; qty: number }[];
+  expiring: ExpiryRow[];
+  expired: ExpiryRow[];
   outOfStock: Product[];
+  expiryWindowDays?: number;
 }
 
 interface LedgerRow {
@@ -49,6 +61,8 @@ export default function InventoryPage() {
   const [adjustBatch, setAdjustBatch] = useState<number | ''>('');
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustReason, setAdjustReason] = useState('');
+  const [adjustType, setAdjustType] = useState<'CORRECTION' | 'COUNT' | 'DAMAGED' | 'LOST'>('COUNT');
+  const [alertTab, setAlertTab] = useState<'low' | 'expiring' | 'expired'>('low');
   const [ledgerFor, setLedgerFor] = useState<InventoryItem | null>(null);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const pharmacy = Boolean(state?.features.pharmacy);
@@ -82,12 +96,14 @@ export default function InventoryPage() {
 
   async function submitAdjust() {
     if (!adjustFor) return;
+    const removes = adjustType === 'DAMAGED' || adjustType === 'LOST';
     try {
       await call('stock.adjust', {
         productId: adjustFor.id,
         batchId: adjustBatch === '' ? undefined : adjustBatch,
-        newQty: Number(adjustQty),
-        reason: adjustReason
+        ...(removes ? { removeQty: Number(adjustQty) } : { newQty: Number(adjustQty) }),
+        reason: adjustReason,
+        reasonType: adjustType
       });
       notify('Stock adjusted and logged.', 'success');
       setAdjustFor(null);
@@ -118,12 +134,16 @@ export default function InventoryPage() {
 
       <div className="kpi-grid">
         <Kpi label="Products tracked" value={String(items.length)} hint={loading ? 'Loading…' : 'Active catalogue'} />
-        <Kpi label="Stock value (cost)" value={formatMoney(totalValue)} hint="Quantity × cost price" />
+        {can('products.manage') ? (
+          <Kpi label="Stock value (cost)" value={formatMoney(totalValue)} hint="Quantity × cost price" />
+        ) : (
+          <Kpi label="Out of stock" value={String(alerts?.outOfStock.length ?? 0)} hint="Nothing to sell" />
+        )}
         <Kpi label="Low stock" value={String(alerts?.lowStock.length ?? 0)} hint="At or below reorder level" />
         <Kpi
-          label={pharmacy ? 'Expiring (90 days)' : 'Out of stock'}
-          value={String(pharmacy ? alerts?.expiring.length ?? 0 : alerts?.outOfStock.length ?? 0)}
-          hint={pharmacy ? 'Batches needing attention' : 'Nothing to sell'}
+          label={`Expiring (${alerts?.expiryWindowDays ?? 90} days)`}
+          value={String(alerts?.expiring.length ?? 0)}
+          hint={alerts?.expired?.length ? `${alerts.expired.length} already expired` : 'Batches needing attention'}
         />
       </div>
 
@@ -135,11 +155,78 @@ export default function InventoryPage() {
         </Alert>
       ) : null}
 
-      {pharmacy && alerts && alerts.expiring.filter((e) => e.daysLeft < 0).length > 0 ? (
+      {alerts && (alerts.expired?.length ?? 0) > 0 ? (
         <Alert tone="error">
-          {alerts.expiring.filter((e) => e.daysLeft < 0).length} expired batch(es) still in stock — quarantine
-          them or adjust the stock to zero.
+          {alerts.expired?.length} expired batch(es) still in stock
+          {pharmacy ? ' — they are blocked from sale' : ''}; quarantine them or adjust the stock to zero.
         </Alert>
+      ) : null}
+
+      {alerts ? (
+        <Card
+          title="Alerts"
+          actions={
+            <div className="row tight">
+              <Button size="sm" variant={alertTab === 'low' ? undefined : 'ghost'} onClick={() => setAlertTab('low')}>
+                Low stock ({alerts.lowStock.length})
+              </Button>
+              <Button
+                size="sm"
+                variant={alertTab === 'expiring' ? undefined : 'ghost'}
+                onClick={() => setAlertTab('expiring')}
+              >
+                Near expiry ({alerts.expiring.length})
+              </Button>
+              <Button
+                size="sm"
+                variant={alertTab === 'expired' ? undefined : 'ghost'}
+                onClick={() => setAlertTab('expired')}
+              >
+                Expired ({alerts.expired?.length ?? 0})
+              </Button>
+            </div>
+          }
+        >
+          {alertTab === 'low' ? (
+            <DataTable<Product>
+              rows={alerts.lowStock}
+              empty="Nothing is at or below its reorder level."
+              columns={[
+                { key: 'name', label: 'Item' },
+                { key: 'sku', label: 'Code' },
+                { key: 'stockQty', label: 'On hand', align: 'right' },
+                { key: 'reorderLevel', label: 'Reorder at', align: 'right' },
+                {
+                  key: 'suggested',
+                  label: 'Suggested order',
+                  align: 'right',
+                  render: (row) => Math.max(row.reorderLevel * 2 - row.stockQty, 1)
+                }
+              ]}
+            />
+          ) : (
+            <DataTable<ExpiryRow>
+              rows={alertTab === 'expiring' ? alerts.expiring : alerts.expired}
+              empty={alertTab === 'expiring' ? 'Nothing expires inside the alert window.' : 'No expired stock — good.'}
+              columns={[
+                { key: 'name', label: 'Item' },
+                { key: 'batchNo', label: 'Batch' },
+                { key: 'expiryDate', label: 'Expires' },
+                {
+                  key: 'daysLeft',
+                  label: 'Days left',
+                  align: 'right',
+                  render: (row) => (
+                    <Badge tone={row.daysLeft < 0 ? 'danger' : row.daysLeft <= 30 ? 'warn' : 'neutral'}>
+                      {row.daysLeft < 0 ? `${Math.abs(row.daysLeft)} overdue` : row.daysLeft}
+                    </Badge>
+                  )
+                },
+                { key: 'qty', label: 'Qty', align: 'right' }
+              ]}
+            />
+          )}
+        </Card>
       ) : null}
 
       <Card>
@@ -230,7 +317,7 @@ export default function InventoryPage() {
               <Button variant="ghost" onClick={() => setAdjustFor(null)}>
                 Cancel
               </Button>
-              <Button onClick={submitAdjust} disabled={adjustReason.trim().length < 3}>
+              <Button onClick={submitAdjust} disabled={adjustReason.trim().length < 3 || adjustQty === ''}>
                 Save adjustment
               </Button>
             </>
@@ -255,14 +342,29 @@ export default function InventoryPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Counted quantity">
-              <Input type="number" min={0} value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} />
+            <Field label="Adjustment type">
+              <select value={adjustType} onChange={(e) => setAdjustType(e.target.value as typeof adjustType)}>
+                <option value="COUNT">Stock count — set the true quantity</option>
+                <option value="CORRECTION">Correction — set the true quantity</option>
+                <option value="DAMAGED">Damaged — remove from stock</option>
+                <option value="LOST">Lost / stolen — remove from stock</option>
+              </select>
             </Field>
-            <Field label="Reason">
+            <Field
+              label={adjustType === 'DAMAGED' || adjustType === 'LOST' ? 'Quantity to remove' : 'Counted quantity'}
+            >
+              <Input
+                type="number"
+                min={adjustType === 'DAMAGED' || adjustType === 'LOST' ? 1 : 0}
+                value={adjustQty}
+                onChange={(e) => setAdjustQty(e.target.value)}
+              />
+            </Field>
+            <Field label="Reason" hint="Required — it is stored with the movement and the audit entry.">
               <Input
                 value={adjustReason}
                 onChange={(e) => setAdjustReason(e.target.value)}
-                placeholder="e.g. Stock count variance"
+                placeholder="e.g. Broken during cleaning"
               />
             </Field>
           </div>

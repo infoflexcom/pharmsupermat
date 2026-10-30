@@ -22,9 +22,20 @@ interface CartLine {
   sku: string;
   listPrice: number;
   unitPrice: number;
+  /** Units for normal goods, grams for weighed goods (kept as an integer). */
   qty: number;
   stockQty: number;
   rxRequired: boolean;
+  isWeighed?: boolean;
+}
+
+/** Line money: weighed goods are priced per kilogram, qty is in grams. */
+function lineTotalOf(line: CartLine): number {
+  return line.isWeighed ? Math.round((line.unitPrice * line.qty) / 1000) : line.unitPrice * line.qty;
+}
+
+function lineQtyLabel(line: CartLine): string {
+  return line.isWeighed ? `${(line.qty / 1000).toFixed(3)} kg` : String(line.qty);
 }
 
 const PAYMENT_LABELS: Record<string, string> = {
@@ -55,6 +66,8 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
   const [busy, setBusy] = useState(false);
   const [receipt, setReceipt] = useState<{ html: string; sale: Sale } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [weighFor, setWeighFor] = useState<Product | null>(null);
+  const [weightInput, setWeightInput] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const draftKey = `infoflex.cart.${mode}`;
 
@@ -101,11 +114,56 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
   }, [search, loadProducts]);
 
   const priceFor = useCallback(
-    (product: Product) => (isWholesale ? product.wholesalePrice || product.price : product.price),
+    (product: Product) => {
+      if (product.isWeighed && product.pricePerKg) return product.pricePerKg;
+      return isWholesale ? product.wholesalePrice || product.price : product.price;
+    },
     [isWholesale]
   );
 
+  /** Adds a weighed item at the given weight; `grams` is rounded to whole grams. */
+  function addWeighed(product: Product, grams: number) {
+    if (!product.isWeighed) return;
+    if (!Number.isFinite(grams) || grams <= 0) {
+      notify('Enter a weight greater than zero.', 'error');
+      return;
+    }
+    if (grams > product.stockQty) {
+      notify(`Only ${(product.stockQty / 1000).toFixed(3)} kg of ${product.name} in stock.`, 'error');
+      return;
+    }
+    setCart((current) => {
+      const existing = current.find((line) => line.productId === product.id);
+      if (existing) {
+        return current.map((line) =>
+          line.productId === product.id
+            ? { ...line, qty: Math.min(line.qty + grams, product.stockQty) }
+            : line
+        );
+      }
+      return [
+        ...current,
+        {
+          productId: product.id,
+          name: product.name,
+          sku: product.sku,
+          listPrice: priceFor(product),
+          unitPrice: priceFor(product),
+          qty: grams,
+          stockQty: product.stockQty,
+          rxRequired: product.rxRequired,
+          isWeighed: true
+        }
+      ];
+    });
+  }
+
   function addToCart(product: Product) {
+    if (product.isWeighed) {
+      setWeighFor(product);
+      setWeightInput('');
+      return;
+    }
     if (!product.active) return;
     if (product.stockQty <= 0) {
       notify(`${product.name} is out of stock.`, 'error');
@@ -165,6 +223,14 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
     );
   }
 
+  function setWeight(productId: number, grams: number) {
+    setCart((current) =>
+      current
+        .map((line) => (line.productId === productId ? { ...line, qty: Math.max(0, grams) } : line))
+        .filter((line) => line.qty > 0)
+    );
+  }
+
   function updatePrice(productId: number, input: string) {
     const value = parseMoneyInput(input);
     setCart((current) =>
@@ -172,10 +238,7 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
     );
   }
 
-  const subtotal = useMemo(
-    () => cart.reduce((sum, line) => sum + line.unitPrice * line.qty, 0),
-    [cart]
-  );
+  const subtotal = useMemo(() => cart.reduce((sum, line) => sum + lineTotalOf(line), 0), [cart]);
   const discountValue = Math.min(parseMoneyInput(discount), subtotal);
   const total = subtotal - discountValue;
   const paid = amountPaid === '' ? total : parseMoneyInput(amountPaid);
@@ -300,12 +363,20 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
                     <span className="pmeta">
                       {product.sku}
                       {product.barcode ? ` · ${product.barcode}` : ''}
+                      {product.pluCode ? ` · PLU ${product.pluCode}` : ''}
                     </span>
                     <span className="pmeta">
-                      {product.stockQty > 0 ? `${product.stockQty} in stock` : 'Out of stock'}
+                      {product.stockQty > 0
+                        ? product.isWeighed
+                          ? `${(product.stockQty / 1000).toFixed(2)} kg in stock`
+                          : `${product.stockQty} in stock`
+                        : 'Out of stock'}
                       {features?.pharmacy && product.nearestExpiry ? ` · exp ${product.nearestExpiry}` : ''}
                     </span>
-                    <span className="pprice">{formatMoney(priceFor(product))}</span>
+                    <span className="pprice">
+                      {formatMoney(priceFor(product))}
+                      {product.isWeighed ? <span className="tiny"> /kg</span> : null}
+                    </span>
                   </button>
                 );
               })
@@ -314,7 +385,7 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
         </Card>
 
         <div className="cart">
-          <Card title={`Basket (${cart.reduce((n, l) => n + l.qty, 0)} items)`}>
+          <Card title={`Basket (${cart.length} line${cart.length === 1 ? '' : 's'})`}>
             <div className="cart-list">
               {cart.length === 0 ? (
                 <div className="empty">Tap a {features?.itemLabel.toLowerCase() ?? 'product'} to start a sale.</div>
@@ -328,17 +399,32 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
                       </div>
                     </div>
                     <div className="row tight" style={{ alignItems: 'flex-start' }}>
-                      <div className="qty-control">
-                        <button type="button" onClick={() => updateQty(line.productId, line.qty - 1)}>
-                          −
-                        </button>
-                        <span>{line.qty}</span>
-                        <button type="button" onClick={() => updateQty(line.productId, line.qty + 1)}>
-                          +
-                        </button>
-                      </div>
+                      {line.isWeighed ? (
+                        <div className="qty-control">
+                          <input
+                            aria-label={`Weight for ${line.name} in kg`}
+                            value={(line.qty / 1000).toFixed(3)}
+                            onChange={(e) => setWeight(line.productId, Math.round(Number(e.target.value) * 1000))}
+                            style={{ width: 70, padding: '2px 4px', textAlign: 'right' }}
+                          />
+                          <span className="tiny muted">kg</span>
+                        </div>
+                      ) : (
+                        <div className="qty-control">
+                          <button type="button" onClick={() => updateQty(line.productId, line.qty - 1)}>
+                            −
+                          </button>
+                          <span>{line.qty}</span>
+                          <button type="button" onClick={() => updateQty(line.productId, line.qty + 1)}>
+                            +
+                          </button>
+                        </div>
+                      )}
                       <div style={{ textAlign: 'right', minWidth: 92 }}>
-                        <div style={{ fontWeight: 700 }}>{formatMoney(line.unitPrice * line.qty)}</div>
+                        <div style={{ fontWeight: 700 }}>{formatMoney(lineTotalOf(line))}</div>
+                        {line.isWeighed ? (
+                          <div className="tiny muted">{formatMoney(line.unitPrice)}/kg · {lineQtyLabel(line)}</div>
+                        ) : null}
                         {canOverride ? (
                           <input
                             aria-label={`Unit price for ${line.name}`}
@@ -449,6 +535,62 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
           </Card>
         </div>
       </div>
+
+      {weighFor ? (
+        <Modal
+          title={`Weigh ${weighFor.name}`}
+          size="sm"
+          onClose={() => setWeighFor(null)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setWeighFor(null)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  addWeighed(weighFor, Math.round(Number(weightInput) * 1000));
+                  setWeighFor(null);
+                }}
+                disabled={!Number(weightInput)}
+              >
+                Add to basket
+              </Button>
+            </>
+          }
+        >
+          <div className="stack">
+            <div className="small muted">
+              {formatMoney(weighFor.pricePerKg ?? 0)} per kg · {(weighFor.stockQty / 1000).toFixed(3)} kg in stock
+              {weighFor.pluCode ? ` · PLU ${weighFor.pluCode}` : ''}
+            </div>
+            <Field label="Weight (kg)" hint="Type the weight shown on the scale, or use the preset buttons.">
+              <Input
+                type="number"
+                min={0.001}
+                step="0.001"
+                value={weightInput}
+                onChange={(e) => setWeightInput(e.target.value)}
+                autoFocus
+              />
+            </Field>
+            <div className="row tight wrap">
+              {[0.25, 0.5, 1, 2, 5].map((kg) => (
+                <Button key={kg} size="sm" variant="ghost" onClick={() => setWeightInput(String(kg))}>
+                  {kg} kg
+                </Button>
+              ))}
+            </div>
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <span className="muted small">Line total</span>
+              <strong>
+                {formatMoney(
+                  Math.round(((weighFor.pricePerKg ?? 0) * Math.round(Number(weightInput) * 1000)) / 1000) || 0
+                )}
+              </strong>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
 
       {receipt ? (
         <Modal

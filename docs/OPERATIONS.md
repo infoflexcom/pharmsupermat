@@ -85,6 +85,32 @@ your records).
 - **Price override** in the supermarket edition needs a supervisor; in the
   pharmacy edition only the administrator has that right.
 - **Reports** print with the store name at the top.
+- **Receive stock**: Products → *Receive* on a row (or Stock & Purchases). You
+  can type packs (one carton = the product's pack size), loose units, or
+  kilograms for a weighed item; the app converts to base units itself.
+- **Adjust stock** (administrator only): Inventory → *Adjust*, choose the type —
+  *Stock count* / *Correction* (set the true quantity) or *Damaged* / *Lost*
+  (remove a quantity) — and give a reason. The reason is mandatory and appears in
+  the ledger and the audit trail.
+- **Import products**: Products → *Template* to get the exact sheet, fill it in,
+  then *Import*. The first pass is a dry run: you see new/updated/unchanged counts
+  and every problem row before anything is written. Choose *Import* to commit.
+  Rows match on SKU, then barcode, then exact name.
+- **Export products**: *Export CSV* or *Export Excel*. In the desktop app the file
+  lands in `data/exports`; in the browser it downloads.
+- **Stocktake** (supermarket, administrator): Stocktake → *Start new count* →
+  type the counted quantities → *Save counted lines* → *Post count*. Posting
+  writes the differences as adjustments with reason type COUNT; a posted count
+  cannot be re-posted or edited.
+- **Purchase orders** (supermarket): Purchase Orders → build the order → *Save
+  order* (stock unchanged) → when the goods arrive, *Receive*: stock is posted and
+  a goods-received note number is issued. A draft order can be cancelled.
+- **Price labels** (supermarket): tick products in the Products list (or leave all
+  clear for the whole catalogue), set copies per product, then *Print label
+  sheet* — an A4 sheet with a scannable barcode on every label.
+- **Weighed goods** (supermarket): mark the product as sold by weight with a price
+  per kg and a PLU code. At the till, tapping it opens a weigh dialog (type kg or
+  pick a preset); the receipt prints the weight in kg.
 
 ## 5. Backups and restore
 

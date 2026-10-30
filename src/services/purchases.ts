@@ -1,7 +1,7 @@
 import type { Database } from '../db';
 import { nowIso } from '../db';
 import { repositoriesFor, type PurchaseItemRow, type PurchaseRow } from '../db/repositories';
-import { notFound, validation } from '../shared/errors';
+import { AppError, notFound, validation } from '../shared/errors';
 import { audit } from './audit';
 import { nextDocumentNumber } from './helpers';
 import { getProduct } from './products';
@@ -29,6 +29,15 @@ export interface PurchaseInput {
 
 export interface PurchaseWithItems extends PurchaseRow {
   items: PurchaseItemRow[];
+}
+
+export interface PurchaseOrderInput {
+  supplierId?: number | null;
+  supplierName?: string | null;
+  invoiceNo?: string | null;
+  purchaseDate?: string;
+  note?: string;
+  items: PurchaseItemInput[];
 }
 
 export function getPurchase(db: Database, id: number): PurchaseWithItems {
@@ -63,6 +72,53 @@ export function listPurchases(
     .all(...params, limit) as PurchaseRow[];
 }
 
+function validateLines(db: Database, items: PurchaseItemInput[]) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw validation('Add at least one item to the purchase.');
+  }
+  return items.map((item) => {
+    if (!Number.isInteger(item.qty) || item.qty <= 0) {
+      throw validation('Purchase quantities must be positive whole numbers.');
+    }
+    if (item.costPrice !== undefined && (!Number.isInteger(item.costPrice) || item.costPrice < 0)) {
+      throw validation('Purchase cost price is invalid.');
+    }
+    if (item.expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(item.expiryDate)) {
+      throw validation('Expiry date must be YYYY-MM-DD.');
+    }
+    const product = getProduct(db, item.productId);
+    const costPrice = item.costPrice ?? product.costPrice;
+    return {
+      product,
+      qty: item.qty,
+      costPrice,
+      batchNo: item.batchNo?.trim() || null,
+      expiryDate: item.expiryDate ?? null
+    };
+  });
+}
+
+function postStock(
+  db: Database,
+  purchaseId: number,
+  documentNo: string,
+  lines: ReturnType<typeof validateLines>,
+  actor: Actor
+): void {
+  for (const line of lines) {
+    receiveStock(db, line.product.id, line.qty, {
+      batchNo: line.batchNo ?? undefined,
+      expiryDate: line.expiryDate,
+      costPrice: line.costPrice,
+      type: 'PURCHASE',
+      refType: 'purchase',
+      refId: purchaseId,
+      note: `Purchase ${documentNo}`,
+      userId: actor.userId
+    });
+  }
+}
+
 /**
  * Records a received purchase and adds the stock to the matching batches.
  * Everything (header, lines, stock, ledger, audit) runs in one transaction.
@@ -83,20 +139,7 @@ export function createPurchase(db: Database, input: PurchaseInput, actor: Actor)
     if (input.supplierId && !supplier) throw notFound('Supplier');
     const now = nowIso();
 
-    const lines = input.items.map((item) => {
-      if (!Number.isInteger(item.qty) || item.qty <= 0) {
-        throw validation('Purchase quantities must be positive whole numbers.');
-      }
-      if (item.costPrice !== undefined && (!Number.isInteger(item.costPrice) || item.costPrice < 0)) {
-        throw validation('Purchase cost price is invalid.');
-      }
-      if (item.expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(item.expiryDate)) {
-        throw validation('Expiry date must be YYYY-MM-DD.');
-      }
-      const product = getProduct(db, item.productId);
-      const costPrice = item.costPrice ?? product.costPrice;
-      return { product, qty: item.qty, costPrice, batchNo: item.batchNo?.trim() || null, expiryDate: item.expiryDate ?? null };
-    });
+    const lines = validateLines(db, input.items);
 
     const subtotal = lines.reduce((sum, line) => sum + line.qty * line.costPrice, 0);
     const discount = input.discount ?? 0;
@@ -106,9 +149,12 @@ export function createPurchase(db: Database, input: PurchaseInput, actor: Actor)
     if (!Number.isInteger(amountPaid) || amountPaid < 0) throw validation('Amount paid is invalid.');
 
     const purchaseNo = nextDocumentNumber(db, 'PUR');
+    const grnNo = nextDocumentNumber(db, 'GRN');
     const purchaseId = Number(
       repos.purchases.insert({
         purchase_no: purchaseNo,
+        grn_no: grnNo,
+        received_at: now,
         supplier_id: supplier?.id ?? null,
         supplier_name: supplier?.name ?? input.supplierName?.trim() ?? null,
         invoice_no: input.invoiceNo?.trim() || null,
@@ -137,17 +183,8 @@ export function createPurchase(db: Database, input: PurchaseInput, actor: Actor)
         expiry_date: line.expiryDate,
         created_at: now
       });
-      receiveStock(db, line.product.id, line.qty, {
-        batchNo: line.batchNo ?? undefined,
-        expiryDate: line.expiryDate,
-        costPrice: line.costPrice,
-        type: 'PURCHASE',
-        refType: 'purchase',
-        refId: purchaseId,
-        note: `Purchase ${purchaseNo}`,
-        userId: actor.userId
-      });
     }
+    postStock(db, purchaseId, purchaseNo, lines, actor);
 
     audit(db, {
       action: 'purchase.receive',
@@ -157,6 +194,7 @@ export function createPurchase(db: Database, input: PurchaseInput, actor: Actor)
       username: actor.username,
       details: {
         purchaseNo,
+        grnNo,
         supplier: supplier?.name ?? input.supplierName ?? null,
         total,
         items: lines.length
@@ -165,4 +203,147 @@ export function createPurchase(db: Database, input: PurchaseInput, actor: Actor)
 
     return getPurchase(db, purchaseId);
   });
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Purchase orders and goods-received notes (supermarket module)       */
+/* ------------------------------------------------------------------ */
+
+/** Saves a purchase order without touching stock. */
+export function createPurchaseOrder(
+  db: Database,
+  input: PurchaseOrderInput,
+  actor: Actor
+): PurchaseWithItems {
+  return db.transaction(() => {
+    const repos = repositoriesFor(db);
+    const supplier = input.supplierId ? repos.suppliers.findById(input.supplierId) : null;
+    if (input.supplierId && !supplier) throw notFound('Supplier');
+    const lines = validateLines(db, input.items);
+    const purchaseDate = (input.purchaseDate ?? '').trim() || new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) throw validation('Order date must be YYYY-MM-DD.');
+    const now = nowIso();
+    const subtotal = lines.reduce((sum, line) => sum + line.qty * line.costPrice, 0);
+    const orderNo = nextDocumentNumber(db, 'PO');
+
+    const orderId = Number(
+      repos.purchases.insert({
+        purchase_no: orderNo,
+        supplier_id: supplier?.id ?? null,
+        supplier_name: supplier?.name ?? input.supplierName?.trim() ?? null,
+        invoice_no: input.invoiceNo?.trim() || null,
+        purchase_date: purchaseDate,
+        subtotal,
+        discount: 0,
+        total: subtotal,
+        amount_paid: 0,
+        status: 'DRAFT',
+        note: input.note?.trim() || null,
+        ordered_at: now,
+        user_id: actor.userId,
+        username: actor.username,
+        created_at: now
+      })
+    );
+
+    for (const line of lines) {
+      repos.purchaseItems.insert({
+        purchase_id: orderId,
+        product_id: line.product.id,
+        name: line.product.name,
+        qty: line.qty,
+        cost_price: line.costPrice,
+        line_total: line.qty * line.costPrice,
+        batch_no: line.batchNo,
+        expiry_date: line.expiryDate,
+        created_at: now
+      });
+    }
+
+    audit(db, {
+      action: 'purchase.order',
+      entity: 'purchase',
+      entityId: orderId,
+      userId: actor.userId,
+      username: actor.username,
+      details: { orderNo, supplier: supplier?.name ?? null, total: subtotal, items: lines.length }
+    });
+    return getPurchase(db, orderId);
+  });
+}
+
+/** Receives a purchase order: posts stock, records the GRN and closes the order. */
+export function receivePurchaseOrder(
+  db: Database,
+  input: { id: number; invoiceNo?: string; purchaseDate?: string; note?: string },
+  actor: Actor
+): PurchaseWithItems {
+  return db.transaction(() => {
+    const repos = repositoriesFor(db);
+    const order = repos.purchases.findById(input.id);
+    if (!order) throw notFound('Purchase order');
+    if (order.status === 'RECEIVED') {
+      throw new AppError('CONFLICT', 'This order has already been received.');
+    }
+    if (order.status === 'CANCELLED') throw new AppError('CONFLICT', 'This order was cancelled.');
+    const items = repos.purchaseItems.all({ purchase_id: order.id });
+    if (items.length === 0) throw validation('The purchase order has no items.');
+
+    const now = nowIso();
+    const grnNo = nextDocumentNumber(db, 'GRN');
+    const lines = items.map((item) => ({
+      product: getProduct(db, item.product_id),
+      qty: item.qty,
+      costPrice: item.cost_price,
+      batchNo: item.batch_no ?? null,
+      expiryDate: item.expiry_date ?? null
+    }));
+    postStock(db, order.id, order.purchase_no, lines, actor);
+
+    db.handle
+      .prepare(
+        `UPDATE purchases
+            SET status = 'RECEIVED', grn_no = ?, received_at = ?,
+                invoice_no = COALESCE(?, invoice_no),
+                purchase_date = COALESCE(?, purchase_date),
+                note = COALESCE(?, note)
+          WHERE id = ?`
+      )
+      .run(grnNo, now, input.invoiceNo?.trim() || null, input.purchaseDate ?? null, input.note?.trim() || null, order.id);
+
+    audit(db, {
+      action: 'purchase.receive',
+      entity: 'purchase',
+      entityId: order.id,
+      userId: actor.userId,
+      username: actor.username,
+      details: {
+        purchaseNo: order.purchase_no,
+        grnNo,
+        supplier: order.supplier_name,
+        total: order.total,
+        items: lines.length
+      }
+    });
+    return getPurchase(db, order.id);
+  });
+}
+
+export function cancelPurchaseOrder(db: Database, id: number, actor: Actor): PurchaseWithItems {
+  const repos = repositoriesFor(db);
+  const order = repos.purchases.findById(id);
+  if (!order) throw notFound('Purchase order');
+  if (order.status !== 'DRAFT') throw new AppError('CONFLICT', 'Only a draft order can be cancelled.');
+  db.handle.prepare("UPDATE purchases SET status = 'CANCELLED' WHERE id = ?").run(id);
+  audit(db, {
+    action: 'purchase.cancel',
+    entity: 'purchase',
+    entityId: id,
+    userId: actor.userId,
+    username: actor.username,
+    severity: 'WARN',
+    details: { orderNo: order.purchase_no }
+  });
+  return getPurchase(db, id);
 }
