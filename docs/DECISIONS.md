@@ -220,8 +220,10 @@ the true first-run experience. Packaged installs always start at activation.
 
 - **electron-vite** for main/preload/renderer builds (one config, fast HMR).
 - **vitest** for API/integration tests (real SQLite in a temp dir, real
-  `invoke()`), plus a jsdom suite that mounts the React app to prove the
-  activation → setup → login → dashboard routing works.
+  `invoke()`), plus two jsdom suites that mount the React app to prove the
+  activation → setup → login → dashboard routing works and that every screen
+  (POS, products, inventory, returns, reports, users, settings, backup, audit,
+  licence) renders without throwing.
 - **No ORM**: hand-written SQL with prepared statements keeps the money
   transactions explicit and the binary small.
 - **Native module builds**: `postinstall` tries to rebuild better-sqlite3 for

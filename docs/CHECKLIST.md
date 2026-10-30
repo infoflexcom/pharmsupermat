@@ -10,7 +10,7 @@ machine.
 | # | Command | Result |
 | --- | --- | --- |
 | 1 | `npm run typecheck` (main + renderer, strict, `noUnusedLocals`) | ✅ clean |
-| 2 | `VENDOR_MASTER_PASSWORD=… npm test` | ✅ **50/50 tests pass** (6 API suites + jsdom renderer suite) |
+| 2 | `VENDOR_MASTER_PASSWORD=… npm test` | ✅ **63/63 tests pass** (6 API suites + 2 jsdom suites mounting every screen) |
 | 3 | `npm run build` (`electron-vite` production bundles) | ✅ `out/main` 137 kB, `out/preload` 0.3 kB, `out/renderer` 824 kB |
 | 4 | `npm run dev:web` + `npm run smoke` (fresh database) | ✅ **30/30 end-to-end checks pass** |
 | 5 | Browser harness served through the Arena preview host | ✅ HTTP 200, React tree + asset graph load, login works |
@@ -105,7 +105,7 @@ HTML export → licence status.
 
 ## What works
 
-- Everything in the checklist marked ✅, verified by 50 automated tests plus the
+- Everything in the checklist marked ✅, verified by 63 automated tests plus the
   30-step end-to-end smoke run against a live instance.
 - The full UI (activation, setup, login, POS, products, inventory, returns,
   sales, wholesale, reports, users, settings, backup, audit, licence) mounts and

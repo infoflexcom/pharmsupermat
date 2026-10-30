@@ -29,7 +29,7 @@ npm run dev:web             # http://localhost:4173
 
 # Checks
 npm run typecheck
-VENDOR_MASTER_PASSWORD='...' npm test      # 50 unit/integration/renderer tests
+VENDOR_MASTER_PASSWORD='...' npm test      # 63 unit/integration/renderer tests
 npm run smoke                              # end-to-end against a running instance
 npm run build                              # typecheck + electron-vite production build
 
