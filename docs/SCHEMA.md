@@ -10,7 +10,7 @@ Infoflex keeps everything in one SQLite file inside the OS application-data fold
 
 Set `INFOFLEX_DATA_DIR` to override the folder (the browser preview and the smoke test do this).
 
-Schema version: **2** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules.
+Schema version: **3** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy.
 
 ## Rules that apply to every table
 
@@ -47,6 +47,13 @@ Accounts and roles (ADMIN / SUPERVISOR / CASHIER) with scrypt password hashes.
 | `last_login_at` | TEXT | yes | — |  |
 | `created_at` | TEXT | NOT NULL | — |  |
 | `updated_at` | TEXT | NOT NULL | — |  |
+| `failed_attempts` | INTEGER | NOT NULL | `0` |  |
+| `locked_until` | TEXT | yes | — |  |
+| `locked_reason` | TEXT | yes | — |  |
+| `password_algo` | TEXT | NOT NULL | `'bcrypt'` |  |
+| `email` | TEXT | yes | — |  |
+
+Indexes: `idx_users_locked`
 
 ### `roles`
 
@@ -87,7 +94,7 @@ Append-only log of sales, voids, returns, price changes, stock counts, logins an
 | `details` | TEXT | yes | — |  |
 | `severity` | TEXT | NOT NULL | `'INFO'` |  |
 
-Indexes: `idx_audit_action`, `idx_audit_created`
+Indexes: `idx_audit_action`, `idx_audit_action_created`, `idx_audit_created`
 
 ### `license_state`
 
@@ -624,6 +631,7 @@ applies every newer migration inside a transaction (rollback on error) and bumps
 | --- | --- |
 | 1 | initial |
 | 2 | shared_catalogue_partners_documents_and_edition_modules |
+| 3 | account_lockout_store_profile_and_idle_policy |
 
 To add a migration: append a `{ version, name, sql }` entry, add any new table/column to
 `src/db/schema.ts`, run `npm run db:verify` (writes and reads a row in every table, checks the
@@ -636,4 +644,4 @@ manifest against the database) and `npm run db:schema` to refresh this page.
 SELECT 'sales', COUNT(*) FROM sales UNION ALL SELECT 'products', COUNT(*) FROM products;
 ```
 
-_30 tables documented; generated 2026-10-30T12:26:15.301Z by scripts/gen-schema-doc.ts._
+_30 tables documented; generated 2026-10-30T13:51:05.625Z by scripts/gen-schema-doc.ts._
