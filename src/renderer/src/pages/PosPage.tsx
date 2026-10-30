@@ -945,7 +945,16 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
                         {m.label}
                       </button>
                     ))}
-                  <button type="button" className={split ? 'active' : ''} onClick={() => setSplit((v) => !v)}>
+                  <button
+                    type="button"
+                    className={split ? 'active' : ''}
+                    onClick={() => {
+                      // Start the split with the whole bill on the current
+                      // method; the cashier adjusts the rows from there.
+                      if (!split) setTender([{ method, amount: total }]);
+                      setSplit((v) => !v);
+                    }}
+                  >
                     Split
                   </button>
                 </div>
