@@ -1,0 +1,14 @@
+node_modules/
+out/
+dist/
+release/
+data/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+!/.env.example
+*.tsbuildinfo
+.vite/
+.arena/

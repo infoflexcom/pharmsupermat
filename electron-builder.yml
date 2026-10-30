@@ -1,0 +1,57 @@
+appId: com.infoflex.pos
+productName: Infoflex
+copyright: Copyright © 2026 Infoflex. All rights reserved.
+
+directories:
+  output: release
+  buildResources: resources/build
+
+files:
+  - out/**/*
+  - resources/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/*.ts'
+
+# The SQLite native binary must sit outside the asar archive.
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+
+win:
+  icon: resources/build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: Infoflex-Setup-${version}.${ext}
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Infoflex
+  installerIcon: resources/build/icon.ico
+  uninstallerIcon: resources/build/icon.ico
+  installerHeaderIcon: resources/build/icon.ico
+  license: docs/EULA.txt
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  menuCategory: false
+
+linux:
+  icon: resources/build/icon.png
+  category: Office
+  target:
+    - AppImage
+  artifactName: Infoflex-${version}.${ext}
+
+mac:
+  icon: resources/build/icon.png
+  category: public.app-category.business
+  target:
+    - dmg
+  identity: null

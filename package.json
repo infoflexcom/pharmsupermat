@@ -1,0 +1,51 @@
+{
+  "name": "infoflex-pharm-mart",
+  "version": "1.0.0",
+  "description": "Infoflex Pharm / Infoflex Mart - offline pharmacy and supermarket point of sale",
+  "main": "./out/main/index.js",
+  "author": "Infoflex",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "dev:web": "tsx harness/server.ts",
+    "build": "npm run typecheck && electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "start": "electron-vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "vendor:keys": "tsx scripts/gen-vendor-secrets.ts",
+    "vendor:license": "tsx scripts/make-license.ts",
+    "icons": "tsx scripts/make-icons.ts",
+    "rebuild:node": "npm rebuild better-sqlite3",
+    "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "node scripts/rebuild-native.mjs",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "smoke": "tsx scripts/smoke.ts",
+    "reset:data": "node scripts/reset-dev-data.mjs",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^45.1.0",
+    "electron-builder": "^26.0.12",
+    "electron-rebuild": "^3.2.9",
+    "electron-vite": "^6.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^7.0.0",
+    "vitest": "^3.0.0",
+    "sharp": "^0.34.2",
+    "jsdom": "^26.0.0"
+  }
+}
