@@ -4,32 +4,72 @@
 
 ```bash
 npm ci
-npm run build            # typecheck + production bundles in out/
-npm run dist:win         # NSIS installer -> release/Infoflex-Setup-<version>.exe
+npm run icons                                       # brand assets from logo-source.png
+VENDOR_MASTER_PASSWORD='...' npm run installer:gate # mint the installer gate header
+npm run dist:win                                    # -> release/Infoflex-Setup-<version>.exe
 ```
 
-- Build the Windows installer on Windows (or Linux with wine installed).
+`npm run dist:win` does the gate, the typecheck, the production build and the
+NSIS package in one go, so in practice:
+
+```bash
+VENDOR_MASTER_PASSWORD='...' npm run dist:win
+```
+
+- Build the Windows installer **on Windows** (or on Linux with wine installed).
+  electron-builder downloads the Electron runtime, winCodeSign and NSIS on the
+  first run, so that machine needs internet once; the resulting installer and
+  the application itself are completely offline.
 - The installer is branded **Infoflex**, installs per-user by default, offers a
   directory choice, creates desktop + start-menu shortcuts and shows the EULA.
 - `deleteAppDataOnUninstall: false` — uninstalling never destroys the shop's
   database.
+- `npm run dist:win:dir` produces the unpacked application folder only
+  (`release/win-unpacked/`) — handy for a smoke test before you wrap it.
+
+### The installer password page
+
+Every build has a **Vendor authorisation** page in front of the welcome page:
+
+| Behaviour | Detail |
+| --- | --- |
+| Password | the vendor master password (the same one the activation screen uses) |
+| Where it lives | nowhere — `scripts/make-installer-gate.ts` writes a random salt and two PBKDF2 digests of the password into `resources/build/generated/gate.nsh` (git-ignored); `resources/build/gate.ps1` recomputes the digest of what was typed |
+| Wrong password | "Next" refuses to advance, with an attempt counter |
+| Five wrong attempts | the installer closes (exit code 2) |
+| Cancel | exits the installer |
+| Silent install (`/S`) | refused outright — there is no page to show, so the gate cannot be honoured |
+| Verifier unavailable | fails closed: a message appears and the installer stops |
+
+`salt` and iteration count are regenerated on every mint, so two builds of the
+same version do not share a digest. `npm run installer:gate:check` re-derives
+the digest from `VENDOR_MASTER_PASSWORD` and tells you whether the header on
+disk was minted from that password (guard against packaging with a typo).
+
+Packaging **fails on purpose** if `resources/build/generated/gate.nsh` is
+missing — an installer without the gate cannot be built by accident.
 
 `npm run dev` runs the Electron app against the Vite dev server.
 `npm run dev:web` runs the same UI + API in a browser (review/QA only).
 
 ### Native SQLite module
 
+`better-sqlite3` v13 ships Node-API prebuilds for every platform inside the
+package (`prebuilds/win32-x64.node`, `linux-x64.node`, …) and the same binary
+loads in Node and in Electron, so no per-runtime rebuild is needed:
+`electron-builder.yml` sets `npmRebuild: false` (rebuilding native code from
+Linux for a Windows target is not possible, and it is not necessary).
+
 | Runtime | Command |
 | --- | --- |
-| Electron app | `npm run rebuild:electron` |
-| Tests / browser harness | `npm run rebuild:node` |
-
-`postinstall` attempts the Electron build and prints guidance if it cannot (e.g.
-an offline machine without Electron headers).
+| Electron app / packaged app | nothing — the prebuild is used as-is |
+| Tests / browser harness | `npm run rebuild:node` (only if a prebuild is missing) |
 
 ## 2. First install (customer)
 
-1. Run `Infoflex-Setup-x.y.z.exe` and complete the installer.
+1. Run `Infoflex-Setup-x.y.z.exe`. The first page asks for the **installer
+   password**; type it and press Next (five wrong attempts close the installer).
+   Then accept the EULA and choose the folder.
 2. Launch Infoflex. The activation screen appears — nothing else is reachable.
 3. Enter the **vendor master password** supplied by Infoflex, then either paste
    the activation code from the vendor, or choose edition/customer/expiry if you

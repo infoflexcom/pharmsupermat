@@ -22,6 +22,12 @@ files:
 asarUnpack:
   - node_modules/better-sqlite3/**/*
 
+# better-sqlite3 v13 ships Node-API prebuilds for every platform inside the
+# package (prebuilds/win32-x64.node, linux-x64.node, …), so the same file loads
+# in Node and in Electron. Rebuilding from source is unnecessary — and on a
+# Linux build machine it is impossible for a Windows target.
+npmRebuild: false
+
 win:
   icon: resources/build/icon.ico
   target:
@@ -32,6 +38,11 @@ win:
   requestedExecutionLevel: asInvoker
 
 nsis:
+  # Vendor gate: a custom password page in front of every other page.
+  # `installer.nsh` is picked up automatically from buildResources, but it is
+  # named here so the wiring is visible. Both files must exist — the compile
+  # fails loudly if the gate header has not been minted.
+  include: resources/build/installer.nsh
   oneClick: false
   perMachine: false
   allowElevation: true

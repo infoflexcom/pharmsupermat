@@ -1159,3 +1159,118 @@ driven in this sandbox; and time travel is done with the injected clock
   now carries milliseconds and a never-overwrite suffix.
 - **The typed restore confirmation had no test** for the wrong-name case; it does
   now, in the backup suite and the UI test.
+
+## 52. The installer gate: a hash, a page in front, and a fail-closed check
+
+**Decision.** The installer asks for the vendor master password on a custom
+NSIS page placed before every other page, and it verifies it by comparing a
+**PBKDF2 digest**, never by comparing text.
+
+**Why not compare the password directly?** Because the NSIS script and the
+compiled installer are readable files on the customer's own machine. A literal
+in either of them is a leaked password. The only artefacts that ship are a
+random 16-byte salt, an iteration count and two digests — in
+`resources/build/generated/gate.nsh`, minted at build time by
+`scripts/make-installer-gate.ts` from `VENDOR_MASTER_PASSWORD`. That file is
+git-ignored, so the repository holds no gate digest either, and
+`npm run verify:secrets` (which now scans the installer and the unpacked build,
+in UTF-8 *and* UTF-16LE, because Unicode NSIS stores literals as UTF-16) proves
+the text is nowhere.
+
+**Why PowerShell instead of an NSIS crypto plugin?** NSIS has no hashing built
+in, and every plugin route needs either a binary we cannot compile here or a
+`System::Call` dance through CryptoAPI that could not be tested in this
+environment. `resources/build/gate.ps1` is ~90 lines, is plain .NET, and does the
+one thing NSIS cannot. It reads the candidate from an **environment variable**
+the installer sets for the child process (never argv, so it does not show up in
+a process list) and clears it as soon as it has hashed it. Windows 10 and 11 —
+the only OS the app supports — always have Windows PowerShell.
+
+**Why two digests?** `Rfc2898DeriveBytes` gained a hash-algorithm overload in
+.NET 4.7.2. Old Windows 10 images have older runtimes. The build mints
+PBKDF2-HMAC-SHA256 *and* PBKDF2-HMAC-SHA1 over the same salt and iteration count;
+the verifier prefers SHA-256 and falls back to SHA-1 if the runtime refuses the
+overload. Both are iterated (150,000), so neither is a bare hash.
+
+**Behaviour, all deliberate:**
+
+| Case | Result |
+| --- | --- |
+| Wrong password | "Next" does not advance; the attempt counter is shown |
+| Five wrong attempts | the installer quits with exit code 2 |
+| Cancel | the installer exits |
+| `/S` silent install | refused before anything else happens — there is no page to show, so the gate could be bypassed |
+| Verifier cannot run | fail **closed**: a message, then the installer stops. A machine with PowerShell broken cannot install, which is the safe direction |
+| Gate header missing at build time | the build fails (`!error` in `installer.nsh`) rather than producing an installer without a gate |
+
+**Iteration count and salt are re-minted on every build**, so two builds of the
+same version do not share a digest. `npm run installer:gate:check` re-derives the
+digest from the environment variable and warns if the header on disk came from a
+different password — the guard against packaging with a typo, which would
+otherwise produce an installer nobody can get past.
+
+## 53. Packaging choices
+
+- **One installer, three editions.** `appId com.infoflex.pos`, `productName
+  Infoflex`, artifact `release/Infoflex-Setup-<version>.exe`. The edition is
+  licence data (see §22), so nothing about the binary changes between a pharmacy,
+  a supermarket and a combined shop.
+- **Per-user install, `asInvoker`.** No administrator rights are needed to
+  install or to run; the data folder is the user's own `%APPDATA%\Infoflex`.
+  `allowToChangeInstallationDirectory` is on for shops that prefer a fixed path.
+- **`deleteAppDataOnUninstall: false`.** Uninstalling removes the programme,
+  never the sales. A reinstall picks the shop up exactly where it left off.
+- **`asar: true` with `asarUnpack: node_modules/better-sqlite3/**/*`.** The
+  licence guards and module gate live in the main process; leaving them as a
+  loose folder of readable files invites editing. The native SQLite binary has to
+  stay outside the archive to be loaded.
+- **`npmRebuild: false`.** `better-sqlite3` v13 ships Node-API prebuilds for
+  every platform inside the package, and the same binary loads in Node and in
+  Electron. Cross-building native code from Linux for Windows is not possible
+  (`node-gyp` refuses), and it is not needed.
+- **Shortcuts:** desktop and Start Menu, both using the brand icon, pointed at
+  the same executable. The window title is set from the licence
+  (`Infoflex Pharm — Point of Sale` etc.) once the edition is known.
+- **Icons are generated**, not committed: `npm run icons` turns
+  `logo-source.png` into `resources/build/icon.ico` (16-256 px, multi-size) and
+  the renderer's logo/login background.
+
+## 54. The installer is a speed bump; activation is the boundary
+
+A copied folder, an extracted installer, a restored backup from another machine
+— all of them land on the activation screen, because everything that decides
+whether the app may be used lives in the user-data database and in the main
+process, not next to the executable. `npm run verify:portable` states that as a
+check rather than a claim:
+
+1. no licensing code in `src/main`, `src/license` or `src/services` reads
+   `process.execPath`, `app.getAppPath()` or the resources path — nothing is
+   bound to where the files sit;
+2. a freshly copied folder starts unlicensed, and `products.list` is refused
+   with `LICENSE_REQUIRED` before activation;
+3. the correct master password activates it, a wrong one does not;
+4. moving the whole folder to another path keeps the licence (proved by
+   renaming the directory and reopening the database);
+5. deleting the user-data folder demands activation again.
+
+## 55. Guide screenshots come from the real UI, and are optional tooling
+
+The figures in the two user guides are produced by driving the browser harness —
+the same React renderer and the same `invoke()` entry point the Electron window
+uses — with Playwright, not by hand-drawn mock-ups. Playwright and a Chromium
+build are *not* dependencies: the packaged app never needs them, `npm test` does
+not need them, and installing them on an offline build machine would fail.
+`scripts/capture-guide-screens.ts` explains what to install, and every figure in
+the guides carries a caption describing what is on the screen, so the guide is
+usable before anyone runs the script.
+
+## 56. What has to be built on Windows
+
+`npm run dist:win` (electron-builder → NSIS) is not runnable in every
+environment: electron-builder fetches the Electron runtime, `winCodeSign` and the
+NSIS distribution from GitHub release assets on first use, and a Linux build
+machine without wine cannot run the NSIS compiler. The configuration, the NSIS
+gate script and the minting step are all in the repository and reviewed; the
+`.exe` itself must be produced on a Windows machine (or Linux with wine), where
+`npm run dist:win` is the whole procedure. See `docs/FINAL-REPORT.md` for what
+that means for this delivery.

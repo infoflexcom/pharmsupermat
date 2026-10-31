@@ -736,3 +736,90 @@ is the Supervisor role, which a pharmacy licence does not offer by design.
 - **The expiry lock over real HTTP.** `npm run e2e` uses the real clock, so it cannot jump a month; the lock and renewal are exercised in `tests/e2e-editions.test.ts` with the injected clock, which is the same code path.
 - **A physical scale, printer or barcode scanner.** Barcodes are tested as strings; the printer list and silent printing degrade with plain messages (phase 9).
 - **Two editions installed side by side on one PC.** Each edition is a separate install with its own data folder; there is no shared-database mode to test.
+
+---
+
+# Phase 11 — Package and document
+
+## What was built
+
+| Deliverable | Where | Notes |
+| --- | --- | --- |
+| Installer gate page | `resources/build/installer.nsh` | custom NSIS page in front of every other page; cannot be skipped, five attempts then exit, `/S` refused, fails closed |
+| Gate verifier | `resources/build/gate.ps1` | PBKDF2 recomputation inside the installer, candidate passed by environment variable (never argv) |
+| Gate minting | `scripts/make-installer-gate.ts` (`npm run installer:gate`) | reads `VENDOR_MASTER_PASSWORD`, cross-checks `vendor-secrets.json`, writes salt + digests to a git-ignored header |
+| Gate consistency check | `npm run installer:gate:check` | re-derives the digest and reports whether the header on disk matches this password |
+| Packaging config | `electron-builder.yml` | NSIS x64, icon, desktop + Start Menu shortcuts, per-user install, EULA, `deleteAppDataOnUninstall: false`, `npmRebuild: false`, gate include |
+| Portable / copied-folder proof | `scripts/verify-portable.ts` (`npm run verify:portable`) | 10 checks |
+| Plaintext scan | `scripts/verify-secrets.ts` (`npm run verify:secrets`) | now scans the installer and the unpacked build too, in UTF-8 and UTF-16LE, chunked, no size cap |
+| README | `README.md` | installer, activation procedure, edition selection, renewal, user guides, troubleshooting |
+| User guides | `docs/USER-GUIDE-PHARMACY.md`, `docs/USER-GUIDE-MART.md` | administrator + cashier, one per edition, no passwords anywhere |
+| Figure pipeline | `scripts/capture-guide-screens.ts`, `docs/screenshots/README.md` | optional Playwright capture of the real UI |
+| Operations | `docs/OPERATIONS.md` | installer password page, gate behaviour table, native-module note |
+| Decisions | `docs/DECISIONS.md §52-§56` | gate design, packaging choices, activation boundary, screenshots, Windows-only build step |
+| Report | `docs/FINAL-REPORT.md` | works / tested / limitations / improvements |
+
+## Verification run
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | ✅ clean (node + web, strict) |
+| `VENDOR_MASTER_PASSWORD=… npm test` | ✅ **21 files, 197 tests passed** (6 new installer-gate tests) |
+| `npm run db:verify` | ✅ **194 checks, 0 failed** (39 tables, schema v8) |
+| `npm run build` | ✅ main 325.15 kB, preload 0.64 kB, renderer 1,125.29 kB + 33.69 kB CSS |
+| `npm run icons` | ✅ `icon.ico` (16/32/48/64/128/256, 58,360 bytes), renderer logo + login background |
+| `VENDOR_MASTER_PASSWORD=… npm run installer:gate` | ✅ header minted (614 bytes, salt + two PBKDF2 digests, no plaintext) |
+| `VENDOR_MASTER_PASSWORD=… npm run installer:gate:check` | ✅ PASS with the right password, refuses a wrong one before minting |
+| `VENDOR_MASTER_PASSWORD=… npm run verify:secrets` | ✅ PASS — 160 files, source + `resources/build` + (when present) `release/` |
+| `VENDOR_MASTER_PASSWORD=… npm run verify:portable` | ✅ **10/10** |
+| `VENDOR_MASTER_PASSWORD=… npm run e2e` | ✅ **32/32** (16 checks × 2 editions) |
+| `BASE_URL=… npm run smoke` | ✅ **54/54** |
+| `VENDOR_MASTER_PASSWORD=… npm run dist:win` | ❌ **blocked in this sandbox** — see below |
+
+## Clean-profile checklist (installer → first launch)
+
+| # | Item | Status here |
+| --- | --- | --- |
+| 1 | Installer blocks without the password | ⚠️ implemented and unit-checked; the `.exe` cannot be built in this sandbox |
+| 2 | Five wrong attempts close the installer | ⚠️ same |
+| 3 | App then asks for activation on first launch | ✅ (fresh data dir in `verify:portable`, `e2e`, smoke) |
+| 4 | Edition + date-range selection works | ✅ (`e2e` × 2 editions; `tests/e2e-editions.test.ts` for expiry) |
+| 5 | First-run setup asks for admin account and store name | ✅ (`e2e`, smoke, `tests/setup-auth.test.ts`) |
+| 6 | Correct modules per edition | ✅ (`e2e` — the other edition's channels are refused) |
+| 7 | Login page shows the logo background | ✅ (`login-bg.jpg` built into `out/renderer/assets`, CSS reference, asset present) |
+| 8 | Icon in taskbar and shortcuts | ⚠️ icon file exists and is wired in `electron-builder.yml`; visible only in a real install |
+| 9 | Printed receipt shows the setup-time store name | ✅ (`e2e` — receipt + credit note + reprint snapshot after a rename) |
+| 10 | Master password nowhere in source, installer or unpacked build | ✅ for source and installer inputs; the packaged artifact does not exist here, so `release/` could not be scanned |
+
+## Bugs found and fixed in this phase
+
+| Bug | How it showed up | Fix |
+| --- | --- | --- |
+| `@electron/rebuild` cannot cross-build `better-sqlite3` from Linux for Windows | `dist:win` died with "node-gyp does not support cross-compiling native modules from source" | `npmRebuild: false` in `electron-builder.yml`; v13 ships Node-API prebuilds for every platform and the same file loads in Node and Electron |
+| `.gitignore` ignored the installer sources | `resources/build/installer.nsh` and `gate.ps1` would have been silently left out of a commit (the minted header is the thing that must stay out) | narrowed the ignore rules; `gate.ps1`/`installer.nsh` are tracked, `resources/build/generated/` is ignored |
+| `verify:secrets` skipped `release/` and could not read big files | the packaged installer and asar would never have been scanned | chunked scan, 8 MB window, UTF-8 **and** UTF-16LE (Unicode NSIS stores literals as UTF-16), `release/` included |
+| Guide capture script broke the typecheck | `tsc` cannot resolve an optional `playwright` import | dynamic import by runtime-computed module name, typed locally |
+
+## What could not be produced here
+
+`npx electron-builder --win nsis --x64` fails in this sandbox before NSIS ever
+runs, because electron-builder downloads the Electron runtime, `winCodeSign` and
+NSIS from GitHub **release assets** on first use and that host is not reachable
+from this environment:
+
+```
+• packaging  platform=win32 arch=x64 electron=45.1.0 appOutDir=release/win-unpacked
+• downloaded label=electron progress=100%
+⨯ Client network socket disconnected before secure TLS connection was established
+```
+
+(`unable to verify the first certificate` without the sandbox CA, the disconnect
+above with it; `NODE_TLS_REJECT_UNAUTHORIZED=0` does not help because the socket
+is dropped after TLS. No NSIS compiler is available either: `apt` cannot fetch
+`nsis`, and the npm packages that ship one ship the Windows binary.)
+
+Consequence: **no `Infoflex-Setup.exe` exists in this delivery**, and the NSIS
+script has therefore never been compiled. Everything the installer needs is in
+the repository and reviewed; the `.exe` must be produced with
+`VENDOR_MASTER_PASSWORD=… npm run dist:win` on Windows (or Linux with wine).
+`docs/FINAL-REPORT.md` says the same thing in the delivery summary.

@@ -858,4 +858,4 @@ manifest against the database) and `npm run db:schema` to refresh this page.
 SELECT 'sales', COUNT(*) FROM sales UNION ALL SELECT 'products', COUNT(*) FROM products;
 ```
 
-_39 tables documented; generated 2026-10-31T11:47:31.790Z by scripts/gen-schema-doc.ts._
+_39 tables documented; generated 2026-10-31T18:17:55.774Z by scripts/gen-schema-doc.ts._

@@ -29,20 +29,25 @@ npm run dev:web             # http://localhost:4173
 
 # Checks
 npm run typecheck
-VENDOR_MASTER_PASSWORD='...' npm test      # 122 unit/integration/renderer tests
-VENDOR_MASTER_PASSWORD='...' npm run verify:secrets   # proves the password is nowhere in plain text
+VENDOR_MASTER_PASSWORD='...' npm test                  # 197 unit/integration/renderer tests
+VENDOR_MASTER_PASSWORD='...' npm run verify:secrets    # password nowhere in plain text (source + installer + build)
+VENDOR_MASTER_PASSWORD='...' npm run verify:portable   # a copied app folder still has to be activated
 npm run db:verify           # writes + reads a row in every table on a temp database
 npm run db:schema           # regenerates docs/SCHEMA.md from the real migrations
 npm run smoke                              # end-to-end against a running instance
+npm run e2e                                # 16 journeys x 2 editions on fresh databases
 npm run build                              # typecheck + electron-vite production build
 
-# Windows installer (on Windows, or Linux with wine)
-npm run dist:win            # -> release/Infoflex-Setup-1.0.0.exe
+# Windows installer (on Windows, or Linux with wine — see "Installer" below)
+VENDOR_MASTER_PASSWORD='...' npm run dist:win   # -> release/Infoflex-Setup-1.0.0.exe
 ```
 
-First launch asks for the **vendor master password**, then your edition +
-expiry (or a paste-in activation code), then your store name and the first
-administrator account.
+The installer asks for the **vendor installer password** before it will copy a
+single file; the first launch then asks for the **vendor master password**, your
+edition + expiry (or a paste-in activation code), and finally the store name and
+the first administrator account. Nothing can be done in the app until that
+activation has happened — including on a folder that was copied from another
+computer.
 
 ---
 
@@ -121,7 +126,7 @@ Set `INFOFLEX_DATA_DIR` to point the whole app at a different folder (used by
 the harness and the smoke test). No network access is required or attempted by
 the app.
 
-The schema — 30 tables, which edition owns each one, indexes and the migration
+The schema — 39 tables, which edition owns each one, indexes and the migration
 history — is documented in [`docs/SCHEMA.md`](docs/SCHEMA.md), generated from
 the live database by `npm run db:schema`.
 
@@ -139,6 +144,33 @@ the live database by `npm run db:schema`.
 
 ## Vendor tooling
 
+### Activation (vendor procedure)
+
+1. The customer reads you the **install code** shown on their activation screen
+   (or you activate on site).
+2. You issue a signed code — it carries the edition, the customer name and the
+   expiry date, and is signed offline with the vendor key:
+   `VENDOR_MASTER_PASSWORD='...' npm run vendor:license -- --edition PHARMACY --customer "Grace Pharmacy, Ikeja" --months 12`
+3. The customer pastes the code, or you type the master password on their till
+   and choose edition + expiry directly. Either way the app re-verifies the
+   signature offline; there is no server and no callback.
+
+### Edition selection
+
+The edition is *licence data*, not a build variant — one installer serves all
+three. The activation code (or the on-site activation form) says `PHARMACY`,
+`SUPERMARKET` or `BOTH`; `src/shared/editions.ts` turns that into the product
+name and feature flags, the main process mounts only those modules' channels,
+and the sidebar only shows what is mounted.
+
+### Renewal
+
+Issue a new code with a later expiry (`--months 12` from today) and paste it
+into **Licence → Renew**. Renewing keeps every record; it never wipes data. If
+the shop lets the licence lapse, the app locks the business screens (point of
+sale, stock, reports) but leaves backups, the licence screen and existing data
+reachable.
+
 ```bash
 # Re-issue the master key material (changes the vendor password/hash)
 VENDOR_MASTER_PASSWORD='...' npm run vendor:keys
@@ -155,6 +187,59 @@ The master password is **never** stored in plain text: the repo holds a salted
 scrypt hash plus the vendor signing key sealed with AES-256-GCM under a key
 derived from that password.
 
-See [docs/DECISIONS.md](docs/DECISIONS.md) for the reasoning behind the design,
-[docs/OPERATIONS.md](docs/OPERATIONS.md) for day-to-day operation and
-[docs/CHECKLIST.md](docs/CHECKLIST.md) for the verification report.
+## Installer
+
+`electron-builder` produces one NSIS installer for all three editions:
+desktop shortcut, Start Menu entry, uninstaller, per-user install, EULA page,
+the brand icon, and a **vendor authorisation page** that will not let the
+install continue without the installer password.
+
+```bash
+VENDOR_MASTER_PASSWORD='...' npm run installer:gate   # mint salt + PBKDF2 digests
+VENDOR_MASTER_PASSWORD='...' npm run installer:gate:check   # does gate.nsh match this password?
+npm run dist:win        # gate + build + package  (Windows, or Linux + wine)
+npm run dist:win:dir    # unpacked folder only, for a smoke test
+```
+
+The gate header (`resources/build/generated/gate.nsh`) is git-ignored and holds
+a salt plus PBKDF2 digests only; `resources/build/gate.ps1` (shipped inside the
+installer) recomputes the digest of what was typed. Five wrong attempts close
+the installer; `/S` silent installs are refused because there is no page to
+show. Details and the exact behaviour table are in
+[docs/OPERATIONS.md §1](docs/OPERATIONS.md).
+
+The installer is only a speed bump: **activation in the app is the real
+enforcement.** `npm run verify:portable` copies the built application into a
+temporary folder outside the repository and proves that every business channel
+is refused until a licence exists, that the licence survives the folder being
+moved, and that deleting user data demands activation again.
+
+## User guides
+
+| Guide | Who it is for |
+| --- | --- |
+| [docs/USER-GUIDE-PHARMACY.md](docs/USER-GUIDE-PHARMACY.md) | pharmacy administrators and cashiers — batches, expiry, prescriptions |
+| [docs/USER-GUIDE-MART.md](docs/USER-GUIDE-MART.md) | supermarket administrators and cashiers — weighed goods, stocktake, shifts |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | whoever installs, licenses, backs up and supports the till |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | the reasoning behind every rule in the app |
+| [docs/CHECKLIST.md](docs/CHECKLIST.md) | what was tested, phase by phase |
+| [docs/FINAL-REPORT.md](docs/FINAL-REPORT.md) | final delivery report: works / tested / limitations / ideas |
+
+Guide figures are rendered by `npm run shots:guide` (see
+[docs/screenshots/README.md](docs/screenshots/README.md)); each figure in the
+guides names its file, and the caption describes exactly what is on screen.
+
+## Troubleshooting
+
+| Symptom | What it means |
+| --- | --- |
+| Installer says *"The installer password was entered incorrectly 5 times"* | it closed on purpose; ask Infoflex for the password again |
+| Installer says *"the password check could not run"* | Windows PowerShell is missing or blocked by policy — contact Infoflex, the installer fails closed |
+| App shows **Activation required** on a computer that was already activated | the data folder is not the one that was activated (new Windows profile, or `%APPDATA%\Infoflex\data` was deleted/restored) — re-activate or restore the folder |
+| **Licence locked — clock** | the system date was moved backwards; sign in with the master password to clear it |
+| **Licence expired** | business screens are locked until a renewal code is entered |
+| Receipts print without a store name | the store name was never set: **Settings → Store name (required)**, then reprint |
+| Wrong figure on a reprint | reprints are snapshots — the store name and prices are those of the original sale, by design |
+| Another PC cannot open the shop's data | the app is per-machine; copy the backup file, or restore it via **Backup & Restore** |
+
+Nothing in the app needs (or attempts) a network connection.
