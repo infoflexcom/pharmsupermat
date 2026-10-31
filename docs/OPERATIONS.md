@@ -70,7 +70,26 @@ This generates a **new signing key**. Licences issued with the old key will fail
 verification, so re-key only when you intend to re-issue licences (document it in
 your records).
 
-## 4. Daily use
+## 4. Demo data (training and first look)
+
+A brand-new install has no products on purpose. Settings → **Demo data** (Admin
+only) adds a realistic sample shop:
+
+- **Pharmacy:** 30 products with batches, near-expiry and one expired batch.
+- **Supermarket:** 60 products in two departments, eight weighed items (PLU
+  00101–00108), three promotions, three wholesale customers, three loyalty
+  members.
+- **Sample users:** `demo.cashier`, and `demo.supervisor` on supermarket and
+  BOTH licences. Password `Demo1234`; each is asked to choose their own at first
+  sign-in.
+
+The sample data is ordinary data: selling a sample product reduces its stock and
+appears in your reports. It is also marked, so **Remove demo data** takes exactly
+those rows out again — anything already sold, invoiced or used is kept and named
+in the message, because deleting it would break real history. Remove the demo
+before the shop starts trading for real.
+
+## 5. Daily use
 
 - **Sign in** with your own account. Cashiers land straight on Point of Sale.
 - **Sell**: search or scan, adjust quantity, apply a discount, choose payment
@@ -116,7 +135,7 @@ your records).
   per kg and a PLU code. At the till, tapping it opens a weigh dialog (type kg or
   pick a preset); the receipt prints the weight in kg.
 
-## 5. Backups and restore
+## 6. Backups and restore
 
 - **Automatic:** one snapshot per 24 hours, taken when the app opens or closes.
   It is skipped on a machine with no licence yet, so a fresh install does not
@@ -166,13 +185,13 @@ A failed restore (wrong file, unreadable database, a file from another program)
 is refused before anything is replaced: the live database and its data stay as
 they were.
 
-## 6. Data location and moving to a new computer
+## 7. Data location and moving to a new computer
 
 Copy the entire `%APPDATA%/Infoflex` folder (data + backups) from the old
 machine to the same path on the new one, install Infoflex there, and sign in.
 The licence travels with the database.
 
-## 7. Printing and hardware
+## 8. Printing and hardware
 
 Receipts/invoices are A4/thermal friendly HTML. By default they go through the
 Windows print dialog, where the operator picks the printer and paper size;
@@ -208,7 +227,7 @@ identity fields. Type a new store name, footer or thank-you note and the paper
 changes before you save; the preview is rendered from the unsaved draft and
 never writes to the database.
 
-## 8. Users and roles
+## 9. Users and roles
 
 | Role | Can do | Cannot do |
 | --- | --- | --- |
@@ -219,7 +238,7 @@ never writes to the database.
 Only administrators can add users or reset passwords. A new user gets a
 temporary password and must change it at first sign-in.
 
-## 9. Database checks, day closing and shifts
+## 10. Database checks, day closing and shifts
 
 ```bash
 npm run db:verify     # writes + reads a row in every table on a throw-away DB
@@ -301,7 +320,7 @@ and the `license_history`, `license_attempts` and `license_guard` tables; an
 existing licence is signed once on first start with its old expiry as the first
 invalid day. Take a backup first if you want a rollback point.
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | What to do |
 | --- | --- |

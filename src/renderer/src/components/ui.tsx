@@ -112,6 +112,79 @@ export function Spinner() {
   return <span className="spinner" aria-label="Loading" />;
 }
 
+/** The one loading treatment: what is loading, and a spinner. */
+export function Loading({ label = 'Loading…' }: { label?: string }) {
+  return (
+    <div className="loading" role="status" aria-live="polite">
+      <Spinner />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+/**
+ * Confirmation dialog for anything that destroys or cannot be undone: voiding a
+ * sale, posting a count, removing demo data. `requireText` asks the operator to
+ * type a value (a file name, a product code) before the button unlocks.
+ */
+export function ConfirmDialog({
+  title,
+  children,
+  confirmLabel = 'Continue',
+  cancelLabel = 'Cancel',
+  tone = 'danger',
+  busy,
+  requireText,
+  requireHint,
+  value,
+  onChange,
+  onConfirm,
+  onClose
+}: {
+  title: string;
+  children: React.ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  tone?: 'danger' | 'primary';
+  busy?: boolean;
+  /** When set, the confirm button unlocks only for this exact text. */
+  requireText?: string;
+  requireHint?: string;
+  value?: string;
+  onChange?: (value: string) => void;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const typed = value ?? '';
+  const blocked = requireText !== undefined && typed.trim() !== requireText;
+  return (
+    <Modal
+      title={title}
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            {cancelLabel}
+          </Button>
+          <Button variant={tone} onClick={onConfirm} disabled={busy || blocked}>
+            {busy ? 'Working…' : confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      {children}
+      {requireText !== undefined ? (
+        <div style={{ marginTop: 12 }}>
+          <Field label={`Type “${requireText}” to confirm`} hint={requireHint}>
+            <Input value={typed} onChange={(e) => onChange?.(e.target.value)} autoFocus />
+          </Field>
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
 export function Money({ value, className }: { value: number; className?: string }) {
   return <span className={`money ${className ?? ''}`}>{formatMoney(value)}</span>;
 }

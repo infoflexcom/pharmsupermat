@@ -178,6 +178,17 @@ const RESPONSES: Record<string, unknown> = {
     backupsDir: 'C:\\ProgramData\\Infoflex\\backups'
   },
   'print.printers': [{ name: 'EPSON TM-T20III', displayName: 'EPSON TM-T20III Receipt', isDefault: true }],
+  'demo.status': {
+    loaded: false,
+    loadedAt: null,
+    products: 0,
+    batches: 0,
+    users: 0,
+    departments: 0,
+    promotions: 0,
+    customers: 0,
+    loyaltyMembers: 0
+  },
   'settings.preview': {
     html: '<html><body><h1>Grace Pharmacy</h1></body></html>',
     layout: 'THERMAL_80',
@@ -325,6 +336,36 @@ describe('every screen renders', () => {
       expect(el.querySelector('.alert.error')).toBeNull();
     });
   }
+});
+
+describe('phase 10 polish', () => {
+  it('offers the optional demo data to the administrator', async () => {
+    const el = await mount(<SettingsPage />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    const text = el.textContent ?? '';
+    expect(text).toContain('Demo data');
+    expect(text).toContain('Load demo data');
+    expect(text).toContain('Not loaded');
+  });
+
+  it('asks before loading demo data into a live shop', async () => {
+    const el = await mount(<SettingsPage />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    const load = Array.from(el.querySelectorAll('button')).find((button) =>
+      (button.textContent ?? '').includes('Load demo data')
+    );
+    expect(load).toBeTruthy();
+    await act(async () => {
+      load?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const dialog = el.querySelector('[role="dialog"]');
+    expect(dialog?.textContent ?? '').toContain('Load demo data?');
+    expect(dialog?.textContent ?? '').toContain('real data');
+  });
 });
 
 describe('phase 9 screens', () => {

@@ -51,6 +51,7 @@ export const TABLES: TableSpec[] = [
   { name: 'day_closings', owner: 'shared', description: 'End-of-day cash reconciliation, one row per business date.' },
   { name: 'counters', owner: 'shared', description: 'Atomic document sequences (RCP, INV, CN, SKU, PUR).' },
   { name: 'sessions_meta', owner: 'shared', description: 'Reserved internal metadata (installation notes); no business data.' },
+  { name: 'demo_data', owner: 'shared', description: 'Register of rows created by "Load demo data", so they can be removed again in one step.' },
 
   /* ---------------------------------------------------------------- */
   /* Supermarket module                                                 */

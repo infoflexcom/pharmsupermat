@@ -1040,3 +1040,122 @@ never reaches the scale parser unless no product carries it.
   SQLite file can edit it. It is evidence for a shop, not a cryptographic log.
 - **Restores are local.** Restoring from a network path works if Windows can read
   it; there is no remote or cloud restore.
+
+## 48. Polish: one confirmation pattern, one loading pattern
+
+Phase 10 replaced the last two `window.confirm()` calls (posting a stock count
+and cancelling a purchase order) with a shared `ConfirmDialog` built on the same
+`Modal` the rest of the app uses, and added the missing confirmations for
+deactivating a product, removing demo data and loading demo data. The rules the
+dialogs follow:
+
+- **Destructive or irreversible → a dialog that says what will happen.** Posting
+  a count changes stock and cannot be reverted ("correct a mistake with a stock
+  adjustment instead"); cancelling an order keeps received stock; deactivating a
+  product keeps it on old receipts; removing demo data names what stays.
+- **Typing a name is reserved for the one truly dangerous action.** Only a
+  database restore asks the operator to type a file name (§43). Adding the same
+  friction to a stock count would train people to type past it.
+- **The dialog lives in the renderer, the rule lives in main.** A dialog is a
+  courtesy; every one of these operations is still refused by the IPC permission
+  check or the service validation if the renderer is bypassed.
+
+Loading and empty states were already `DataTable`'s "Nothing to show yet" plus a
+`Loading…` string while a fetch is in flight; adding a `Loading` and a
+`ConfirmDialog` component to `components/ui.tsx` gives the two shared treatments
+a name, and the stylesheet gained the matching `.loading` row.
+
+## 49. Demo data is real data, registered so it can leave again
+
+A new installation is empty, which is correct for a shop and useless for a
+demonstration or a training session. `demo.load` (Admin only) seeds:
+
+- **Pharmacy:** 30 products across eight categories with opening batches, four of
+  them with a second batch expiring sooner (so FEFO has something to show) and
+  one expired batch next to good stock (so the expiry guard has something to
+  refuse).
+- **Supermarket:** 60 products across Groceries and Household, eight weighed
+  items with PLU codes and prices per kilogram, three promotions (a department
+  percentage, a buy-one-get-one and a multi-buy bundle), three wholesale
+  customers and three loyalty members.
+- **Both editions:** the catalogue for each module, plus sample users
+  (`demo.cashier`, and `demo.supervisor` where the edition has supervisors) with
+  the password `Demo1234`, forced to change it at first sign-in like any other
+  new account.
+
+Decisions worth stating:
+
+- **It goes through the services, not raw inserts.** Stock, batches, audit
+  entries, SKU counters and validation are the real thing, so a demo product
+  behaves exactly like one the shop added. That is the point: the demo is only
+  useful if the screens behave.
+- **Every seeded row is written to `demo_data`** (migration 8) at the moment it
+  is created. That register is the only way to remove "the demo" without
+  touching the shop's own records.
+- **Removal never breaks history.** A demo product that has been sold, a demo
+  customer with invoices, a loyalty member with points or a user with activity
+  are skipped and returned in `kept`, with the reason. A shop can therefore run
+  a training session on the demo catalogue, remove it, and still find the two
+  sales the trainee made in the reports — deleting them would have destroyed
+  real money movement.
+- **One dataset, not many.** Loading twice is `CONFLICT` rather than doubling the
+  catalogue; removing and loading again gives a fresh one.
+- **No demo sales.** The seed never creates a sale, so "remove demo data" can
+  never be used to delete something the shop sold. Sales made *using* demo
+  products are real sales and stay.
+- **It is not hidden behind a build flag.** A shipped installer has the same
+  button; a shop that wants to try the app on a quiet afternoon should not need
+  a developer.
+
+## 50. What the phase-10 tests pin
+
+Three layers, each doing a job the others cannot:
+
+1. **`tests/phase10-units.test.ts` — the arithmetic.** Retail vs wholesale (the
+   trade price only applies on an invoice once the wholesale minimum is
+   reached), FEFO (the earliest batch leaves first, an expired batch is never
+   sold), promotions (best single offer per line, never stacked; percentage,
+   BOGO and multi-buy each worked by hand), loyalty (2 points per ₦100, a point
+   worth ₦50, points spent and re-earned), return limits (over ₦20,000 goes to
+   the approval queue, out-of-window needs an `APPROVAL_REQUIRED` override),
+   daily/monthly totals (a void sale is not a sale; a refund reduces takings but
+   not gross), licence dates (a month later the app locks and a renewal unlocks
+   it), edition flags, and the store-name snapshot (a reprint after a rename
+   still shows the old name, and so does the credit note).
+2. **`tests/e2e-editions.test.ts` — the journeys, once per edition.** Activation
+   with each edition, first-run setup (including the empty-name refusal and the
+   second-setup refusal), login for Admin, Supervisor and Cashier (temp-password
+   gate, role refusals), a sale to a printed receipt showing the store name,
+   a duplicate reprint, a return with a credit note, the daily report, the
+   edition gate on IPC channels, expiry → lock → renewal, and a BOTH shop
+   selling a pharmacy item and 1.5 kg of rice on one receipt.
+3. **`tests/renderer-pages.test.tsx` — the screens.** Every page mounts with a
+   mocked bridge without throwing, plus phase-specific assertions (the live
+   receipt preview, the demo-data and confirmation dialogs, the typed restore).
+
+Deliberate gaps: the E2E journeys run through `invoke` (the real main-process
+entry point) rather than a browser driver, because the Electron window cannot be
+driven in this sandbox; and time travel is done with the injected clock
+(`createHarness({ now })`), which is also how the licence guard is tested.
+
+## 51. Bugs found while testing, and what changed
+
+- **Sessions ignored the injected clock.** `createSession` and `resolveSession`
+  stamped and compared `Date.now()`, while the licence guard used `ctx.now()`.
+  Under a simulated clock the two disagreed, the guard saw a rollback that had
+  not happened and locked the app mid-request. Both now use `ctx.now()`
+  (session.ts), so the idle timeout, the licence check and the rest of main
+  share one clock. In production the two are the same; the fix makes the app
+  testable and keeps the guard's view of time consistent.
+- **Time travel now ends a sign-in.** Because the idle timeout finally uses the
+  same clock, moving the clock forward a month also ends the session — which is
+  what would happen on a real machine left idle. The licence tests were updated
+  to sign in again after the jump rather than being weakened.
+- **Demo prices per kilogram were in the wrong unit.** The supermarket seed set
+  `pricePerKg` in naira rather than kobo (₦14/kg of rice instead of ₦1,400/kg).
+  The BOTH-edition test caught it when 1.5 kg of rice came to ₦21.00.
+- **A second backup or restore in the same second collided** (phase 9, found
+  while testing restores): `VACUUM INTO` refuses to overwrite, so the file name
+  now carries milliseconds and a never-overwrite suffix.
+- **The typed restore confirmation had no test** for the wrong-name case; it does
+  now, in the backup suite and the UI test.

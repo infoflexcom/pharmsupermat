@@ -20,6 +20,7 @@ import { authenticate, changePassword } from '../../services/auth';
 import { audit, listAudit } from '../../services/audit';
 import { getAllSettings, updateSettings } from '../../services/settings';
 import { previewReceipt } from '../../services/receiptPreview';
+import { demoStatus, loadDemoData, removeDemoData } from '../../services/demo';
 import type { CompleteSetupInput, ProductInput, SettingsPayload } from '../../shared/types';
 import {
   createProduct,
@@ -424,6 +425,32 @@ export const CORE_HANDLERS: Handler[] = [
   {
     channel: 'settings.read',
     handler: (args) => getAllSettings(args.ctx.db)
+  },
+  /* ---------------- optional demo data (phase 10) ---------------- */
+  {
+    // A brand-new shop is empty on purpose; this is how an administrator asks
+    // for a realistic catalogue to try the app with, and takes it out again.
+    channel: 'demo.status',
+    permission: 'settings.manage',
+    handler: (args) => demoStatus(args.ctx.db)
+  },
+  {
+    channel: 'demo.load',
+    permission: 'settings.manage',
+    handler: (args) => {
+      const session = requireSession(args);
+      const edition = args.license.edition;
+      if (!edition) throw new AppError('LICENSE_REQUIRED', 'Activate your licence before loading demo data.');
+      return loadDemoData(args.ctx.db, edition, actor(session));
+    }
+  },
+  {
+    channel: 'demo.remove',
+    permission: 'settings.manage',
+    handler: (args) => {
+      const session = requireSession(args);
+      return removeDemoData(args.ctx.db, actor(session));
+    }
   },
   {
     channel: 'settings.update',

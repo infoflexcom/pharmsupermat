@@ -822,6 +822,24 @@ export const MIGRATIONS: Migration[] = [
       UPDATE returns
          SET sale_receipt_no = (SELECT s.receipt_no FROM sales s WHERE s.id = returns.sale_id);
     `
+  },
+  {
+    version: 8,
+    name: 'demo_data_register',
+    sql: /* sql */ `
+      /* ---------------------------------------------------------------- *
+       * Demo data: which rows the "Load demo data" button created, so the *
+       * administrator can take them all out again without touching real   *
+       * trading data. Nothing here is referenced by a foreign key — it is  *
+       * a register, not a relationship.                                   *
+       * ---------------------------------------------------------------- */
+      CREATE TABLE IF NOT EXISTS demo_data (
+        entity TEXT NOT NULL,
+        entity_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (entity, entity_id)
+      );
+    `
   }
 ];
 

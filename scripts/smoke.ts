@@ -736,6 +736,23 @@ async function main() {
     assert(history.some((row) => row.action === 'RENEW'), 'renewal missing from history');
   });
 
+  await check('demo data loads a realistic shop and can be removed', async () => {
+    const before = await api<{ loaded: boolean }>('demo.status');
+    assert(before.loaded === false, 'demo data was already loaded');
+    const loaded = await api<{ loaded: boolean; products: number; batches: number; users: number }>('demo.load', {});
+    assert(loaded.loaded === true, 'demo status did not flip');
+    assert(loaded.products >= 30, `only ${loaded.products} demo products`);
+    assert(loaded.batches >= 30, 'demo batches missing');
+    assert(loaded.users >= 1, 'no sample users');
+    const products = await api<Array<{ name: string }>>('products.list', {});
+    assert(products.some((p) => p.name.includes('Paracetamol')), 'expected pharmacy demo products');
+    const removed = await api<{ removed: number; kept: string[] }>('demo.remove', {});
+    assert(removed.removed > 0, 'nothing removed');
+    assert(removed.kept.length === 0, `kept ${removed.kept.join(', ')}`);
+    const after = await api<{ loaded: boolean }>('demo.status');
+    assert(after.loaded === false, 'demo data still loaded');
+  });
+
   await check('licence status reports expiry window', async () => {
     const status = await api<{ state: string; daysRemaining: number }>('license.status');
     assert(status.state === 'VALID' || status.state === 'EXPIRING', status.state);

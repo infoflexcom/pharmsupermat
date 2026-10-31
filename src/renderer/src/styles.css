@@ -1278,6 +1278,15 @@ table.data tfoot td {
   display: inline-block;
 }
 
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .loading-screen {
   min-height: 100vh;
   display: grid;

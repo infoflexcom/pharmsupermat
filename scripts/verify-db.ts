@@ -340,6 +340,13 @@ function main(): number {
     };
     check('cost redaction keeps selling price', masked.costPrice === 0 && masked.price === 7_000);
 
+    /* ---- demo data register ---- */
+    db.handle
+      .prepare('INSERT INTO demo_data (entity, entity_id, created_at) VALUES (?, ?, ?)')
+      .run('product', product.id, new Date().toISOString());
+    const demoRows = db.handle.prepare('SELECT COUNT(*) AS n FROM demo_data').get() as { n: number };
+    check('demo register records seeded rows', demoRows.n === 1);
+
     /* ---- every table has at least one row ---- */
     const rows: Array<{ table: string; rows: number }> = [];
     for (const name of TABLE_NAMES) {

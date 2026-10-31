@@ -230,7 +230,9 @@ describe('expiry enforcement', () => {
       endsOn: addYears(localDate(clock.current()), 1)
     });
     expect(renewed.state).toBe('VALID');
-    const settings = await callOk<{ storeName: string }>(h, 'settings.read', {}, admin.token);
+    // Two days without a request also ended the sign-in — re-enter and carry on.
+    const again = await signIn(h);
+    const settings = await callOk<{ storeName: string }>(h, 'settings.read', {}, again.token);
     expect(settings.storeName).toBe('Bright Care Pharmacy');
     h.close();
   });
@@ -284,6 +286,7 @@ describe('anti-tampering', () => {
     clock.advanceDays(-6);
     const rolled = await callOk<LicenseStatus>(h, 'license.status');
     expect(rolled.state).toBe('CLOCK_ROLLBACK');
+    // Ten idle days ended the old sign-in; a new one is refused by the lock.
     expect((await callErr(h, 'products.list', {}, admin.token)).code).toBe('LICENSE_LOCKED');
 
     // A wrong password does not clear the lock…
@@ -293,7 +296,8 @@ describe('anti-tampering', () => {
     // …the right one does.
     const unlocked = await callOk<LicenseStatus>(h, 'license.unlock', { masterPassword: PASSWORD() });
     expect(unlocked.state).toBe('VALID');
-    expect((await callOk<unknown[]>(h, 'products.list', {}, admin.token)).length).toBeGreaterThanOrEqual(0);
+    const session = await signIn(h);
+    expect((await callOk<unknown[]>(h, 'products.list', {}, session.token)).length).toBeGreaterThanOrEqual(0);
     h.close();
   });
 

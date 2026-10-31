@@ -287,6 +287,24 @@ export interface ProductScan {
 /* Backup & restore (phase 9)                                          */
 /* ------------------------------------------------------------------ */
 
+export interface DemoStatus {
+  loaded: boolean;
+  /** When the seed was loaded (the register's first row). */
+  loadedAt: string | null;
+  products: number;
+  batches: number;
+  users: number;
+  departments: number;
+  promotions: number;
+  customers: number;
+  loyaltyMembers: number;
+}
+
+export interface DemoRemoval {
+  removed: number;
+  kept: string[];
+}
+
 export interface BackupInfo {
   name: string;
   path: string;

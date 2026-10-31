@@ -13,6 +13,7 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   DataTable,
   Field,
   Input,
@@ -129,6 +130,7 @@ export default function ProductsPage() {
   const [importFile, setImportFile] = useState<{ filename: string; data: string; encoding: 'base64' | 'utf8' } | null>(null);
   const [importing, setImporting] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
+  const [confirmToggle, setConfirmToggle] = useState<Product | null>(null);
   const [labelHtml, setLabelHtml] = useState<string | null>(null);
   const [labelOptions, setLabelOptions] = useState<PriceLabelOptions>({
     copies: 1,
@@ -594,7 +596,11 @@ export default function ProductsPage() {
                     </Button>
                   ) : null}
                   {manager ? (
-                    <Button size="sm" variant="ghost" onClick={() => void toggleActive(r)}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => (r.active ? setConfirmToggle(r) : void toggleActive(r))}
+                    >
                       {r.active ? 'Deactivate' : 'Activate'}
                     </Button>
                   ) : null}
@@ -1097,6 +1103,23 @@ export default function ProductsPage() {
         <Modal title="Price labels" size="wide" onClose={() => setLabelHtml(null)}>
           <DocumentView html={labelHtml} filename="price-labels.html" title="Price labels" />
         </Modal>
+      ) : null}
+      {confirmToggle ? (
+        <ConfirmDialog
+          title="Take this product off sale?"
+          confirmLabel="Deactivate"
+          cancelLabel="Keep selling"
+          busy={saving}
+          onClose={() => setConfirmToggle(null)}
+          onConfirm={() => {
+            const product = confirmToggle;
+            setConfirmToggle(null);
+            void toggleActive(product);
+          }}
+        >
+          <strong>{confirmToggle.name}</strong> stays in the catalogue and on old receipts, but the till will refuse to
+          sell it. You can reactivate it at any time; nothing is deleted.
+        </ConfirmDialog>
       ) : null}
     </div>
   );

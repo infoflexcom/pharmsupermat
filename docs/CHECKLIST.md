@@ -645,3 +645,94 @@ Verified on the same headless Linux sandbox.
 - **The Electron folder/file dialogs.** `dialog.showOpenDialog` only exists in the desktop build; in the browser the page falls back to typing a path (asserted by the renderer tests).
 - **A literal "delete infoflex.db and restore".** A restore deliberately keeps the licence of the machine it runs on, so a database deleted *including its licence tables* comes back as an unlicensed install until the vendor re-issues — that is the "never bypass the licence" rule working as designed. The live run therefore simulates the disaster by changing data after the backup.
 - **Time travel for the seven-day warning.** The staleness clock is `Date.now()`; the threshold and the fresh case are asserted, and the older-than-seven-days case is covered by unit logic rather than by moving the machine clock.
+
+# Phase 10 — Polish and testing
+
+## Pass/fail by edition
+
+Every row below was run twice: once on a PHARMACY licence and once on a
+SUPERMARKET licence, on fresh databases. "E2E" is `npm run e2e` (real HTTP
+bridge, own data directory and port per edition); "test" is the vitest suite
+(`tests/e2e-editions.test.ts`, `tests/phase10-units.test.ts`).
+
+| Journey | PHARMACY | SUPERMARKET | Evidence |
+| --- | --- | --- | --- |
+| Activation with the edition | **PASS** | **PASS** | E2E + test: `license.activate` → `VALID`, edition echoed, product name `Infoflex Pharm` / `Infoflex Mart`, module flags correct |
+| First-run setup: admin + store name | **PASS** | **PASS** | E2E: `setup.complete` then `setupRequired: false`; the store name appears on every document |
+| Empty store name rejected | **PASS** | **PASS** | `VALIDATION` "Store name cannot be empty." in the API and in the E2E run; the setup screen disables the button and shows the same sentence |
+| Second setup refused | **PASS** | **PASS** | `CONFLICT` when setup runs twice |
+| Login: Admin | **PASS** | **PASS** | E2E; wrong password → `UNAUTHENTICATED` |
+| Login: Cashier (+ forced password change) | **PASS** | **PASS** | E2E: temp password flagged, business calls refused until changed, then allowed; cashier cannot add users |
+| Login: Supervisor | **n/a** (role not offered) | **PASS** | test: `users.create SUPERVISOR` on a pharmacy licence → `EDITION_RESTRICTED`; on a supermarket licence the supervisor signs in and can approve but not administer |
+| A sale to a printed receipt showing the store name | **PASS** | **PASS** | 2 × ₦1,350.00 = ₦2,700.00; receipt contains store name, address and receipt number; second print stamped DUPLICATE |
+| A return with a credit note | **PASS** | **PASS** | ₦1,350.00 refund, credit note shows the store name and its own number |
+| Reports | **PASS** | **PASS** | Daily summary: gross ₦2,700.00, returns ₦1,350.00, net ₦1,350.00, store name in the HTML |
+| The expiry lock | **PASS** | **PASS** | test with the injected clock: 31 days later `EXPIRED`, business channels `LICENSE_EXPIRED`, `license.status` still answers |
+| Renewal | **PASS** | **PASS** | test + smoke: new period → `VALID`, old data intact, both periods in `license.history` |
+| The other edition's module is off | **PASS** | **PASS** | `pharmacy.expiryWatch` on a supermarket licence → `EDITION_RESTRICTED` (and the reverse) |
+| Demo dataset loads and removes | **PASS** | **PASS** | 30 pharmacy products / 35 batches; 60 supermarket products, 2 departments, 8 weighed items, 3 promotions, 3 customers, 3 loyalty members; removal takes exactly the seeded rows out |
+| Store rename keeps old receipts | **PASS** | **PASS** | E2E: the renamed shop's old receipt still prints the old name, and the preview follows the new one |
+
+Nothing in the table is a "partial" or an "n/a because it failed": the only n/a
+is the Supervisor role, which a pharmacy licence does not offer by design.
+
+## Polish
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Navy/gold/off-white styling applied consistently | ✅ | Every screen renders through the shared `Card`/`PageHead`/`Button`/`DataTable`/`Badge`/`Alert` components; the renderer test mounts all 25 pages and asserts no error alert appears |
+| Friendly validation messages | ✅ | Every service throws a sentence, not a code: "Store name cannot be empty.", "That folder does not exist. Plug the drive in and choose it again.", "You can return at most 2 of Paracetamol (1 already returned)." The renderer shows them in a toast or an inline alert |
+| Confirmation dialogs for destructive actions | ✅ | Shared `ConfirmDialog`: post a stock count, cancel a purchase order, deactivate a product, load/remove demo data, void a sale (with reason), restore a backup (type the file name). `window.confirm` is gone from the codebase |
+| Loading states | ✅ | `Loading` component plus "Loading…" in tables and KPIs while a fetch is in flight (`DashboardPage`, `InventoryPage`, `AuditPage`, `ProductsPage`, …) |
+| Empty states | ✅ | `EmptyState` inside every `DataTable` with a sentence per screen ("No backups found yet. Take one now.") |
+
+## Optional demo data
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| ~30 pharmacy products with batches | ✅ | 30 products across 8 categories, 35 batches, second batches for FEFO, near-expiry stock and one expired batch |
+| ~60 supermarket products incl. weighed items, promotions, 2 departments | ✅ | 60 products in Groceries and Household, 8 weighed items with PLU 00101–00108 and prices per kg, 3 promotions (PERCENT/BOGO/MULTIBUY) that the pricing engine actually applies |
+| Sample users | ✅ | `demo.cashier` and (supermarket/BOTH) `demo.supervisor`, password `Demo1234`, forced to change at first sign-in |
+| Admin can load **and remove** | ✅ | `demo.load` / `demo.remove` / `demo.status`, `settings.manage` only; removal keeps anything the shop has used and reports it; tested (including a sold demo product being kept) |
+| Does not disturb real data | ✅ | Removal only touches ids in the `demo_data` register; the seed never creates a sale |
+
+## Unit tests requested in this phase
+
+| Area | Test | Result |
+| --- | --- | --- |
+| Retail vs wholesale pricing | `phase10-units` — receipts stay at shelf price; invoices drop to the trade price only at the wholesale minimum; the sale stores what it charged | ✅ |
+| FEFO deduction | earliest-expiring batch sells first (4 from EARLY, 2 from LATE); an expired batch alone → `INSUFFICIENT_STOCK` | ✅ |
+| Promotions maths | 10% off ₦3,000 → ₦300; BOGO 4 → 2 free; multi-buy 5 for ₦4,000 → ₦1,000 off; two units do not trigger the bundle; offers never stack | ✅ |
+| Loyalty maths | ₦10,000 at 2 pts/₦100 → 200 pts; 50 pts at ₦50 → ₦2,500 off; re-earns 150 → balance 300 | ✅ |
+| Return limits | a ₦30,000 receipt over the ₦20,000 cashier ceiling is queued, a cashier cannot approve it, an admin can; out-of-window returns need `APPROVAL_REQUIRED` | ✅ |
+| Daily/monthly totals | void excluded, refund reduces takings, gross/returns/net agree between the daily and monthly reports | ✅ |
+| Licence date range and edition flags | expiry locks trading, renewal unlocks, history keeps both periods; module flags per edition | ✅ |
+| Store-name snapshot on sales and reprints | old receipt and credit note keep the old name after a rename; address/phone snapshotted too; a blank name cannot be saved | ✅ |
+
+## Verification run
+
+- `npm run typecheck` — clean (node + web, strict, `noUnusedLocals`).
+- `VENDOR_MASTER_PASSWORD=... npm test` — **20 files, 191 tests passed** (15 phase-10 unit tests, 5 edition E2E tests, 2 new renderer tests, and the licence-guard suite updated for the shared clock).
+- `npm run db:verify` — **194 checks, 0 failed** (39 tables, schema v8 — `demo_data`).
+- `VENDOR_MASTER_PASSWORD=... npm run verify:secrets` — PASS (155 files scanned).
+- `VENDOR_MASTER_PASSWORD=... npm run e2e` — **32/32** (16 checks × 2 editions), fresh database per edition, table printed by the script.
+- `BASE_URL=... npm run smoke` (fresh data dir) — **54/54**, including demo data load/remove.
+- `npm run build` — main 325.15 kB, preload 0.64 kB, renderer 1,125.29 kB + 33.69 kB CSS.
+- Browser harness left running with the pharmacy demo catalogue loaded for a live look.
+
+## Bugs found and fixed
+
+| Bug | How it showed up | Fix |
+| --- | --- | --- |
+| Sessions stamped and compared `Date.now()` while the licence guard used the injected clock | The E2E expiry journey locked the app with "the system clock has moved backwards" mid-request | `session.ts` uses `ctx.now()` for the idle timeout, the licence re-read and new sessions |
+| Time travel did not end a session | Follow-on from the fix: a month of idleness now signs out, as the 15-minute idle rule requires | Licence tests sign in again after jumping the clock |
+| Demo prices per kilogram were in naira, not kobo | The BOTH-edition test sold 1.5 kg of rice for ₦21.00 | `pricePerKg` values ×100 (₦800–₦3,200/kg) |
+| Two backups or restores in the same second collided (`VACUUM INTO` refuses to overwrite) | Found while testing the restore path in phase 9 | Millisecond timestamps + `uniquePath` never overwrites |
+| The `e2e` script left its harness processes running, so the next run reused an old database | Second run showed a renamed store on a "fresh" install | The script starts each harness in its own process group and kills the group |
+
+## What was not verified here
+
+- **A real Electron window.** The journeys drive the same main-process handlers through the HTTP bridge; the window, its menus and the OS dialogs need Windows. The renderer is covered by the jsdom page tests (all 25 screens mount).
+- **The expiry lock over real HTTP.** `npm run e2e` uses the real clock, so it cannot jump a month; the lock and renewal are exercised in `tests/e2e-editions.test.ts` with the injected clock, which is the same code path.
+- **A physical scale, printer or barcode scanner.** Barcodes are tested as strings; the printer list and silent printing degrade with plain messages (phase 9).
+- **Two editions installed side by side on one PC.** Each edition is a separate install with its own data folder; there is no shared-database mode to test.

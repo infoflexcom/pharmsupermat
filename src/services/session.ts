@@ -115,8 +115,10 @@ export function createSession(
     role: user.role,
     permissions: permissionsForRole(user.role, edition),
     mustChangePassword: user.mustChangePassword,
-    createdAt: Date.now(),
-    lastSeen: Date.now()
+    // Stamped with the app's clock, not the system clock, so a session and the
+    // idle check that reads it always agree.
+    createdAt: ctx.now().getTime(),
+    lastSeen: ctx.now().getTime()
   };
   // One live session per user keeps role/permission changes predictable.
   for (const [existingToken, existing] of ctx.sessions) {
@@ -132,7 +134,8 @@ export function resolveSession(ctx: ApiContext, token: unknown): Session | null 
   if (!session) return null;
   // Idle expiry is enforced here, in the main process, so a renderer that
   // ignores its own timer still cannot keep a session alive.
-  if (Date.now() - session.lastSeen > sessionIdleMs(ctx.db)) {
+  const now = ctx.now().getTime();
+  if (now - session.lastSeen > sessionIdleMs(ctx.db)) {
     ctx.sessions.delete(token);
     return null;
   }
@@ -143,12 +146,15 @@ export function resolveSession(ctx: ApiContext, token: unknown): Session | null 
     ctx.sessions.delete(token);
     return null;
   }
-  const license = getLicenseStatus(ctx.db);
+  // The licence is re-read with the same clock the caller uses. Reading it
+  // with the system clock here once made an injected clock look like a
+  // rollback and locked the app mid-request.
+  const license = getLicenseStatus(ctx.db, ctx.now());
   session.role = user.role;
   session.fullName = user.full_name;
   session.mustChangePassword = !!user.must_change_password;
   session.permissions = permissionsForRole(user.role, license.edition);
-  session.lastSeen = Date.now();
+  session.lastSeen = now;
   return session;
 }
 

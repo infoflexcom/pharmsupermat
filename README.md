@@ -60,7 +60,9 @@ administrator account.
 | Wholesale | invoices at wholesale prices with customer details |
 | Reports | sales summary, product sales/profit, stock valuation, low stock, expiry watch, returns, audit trail — all printable with the store name |
 | Users | Admin / Supervisor (supermarket only) / Cashier with per-call permission checks |
+| Testing | 191 unit/API/renderer tests, a 16-check end-to-end run against a fresh install per edition (`npm run e2e`), a 54-check smoke run against a live server, and a database verifier (194 checks) |
 | Data safety | WAL SQLite, transactions for every money/stock change, a daily automatic backup, manual backup to a USB stick or any folder, typed-confirmation restore that always keeps the licence and writes an undo copy, and a warning after seven days without a backup |
+| Demo data | optional sample shop (Admin): 30 pharmacy products with batches, or 60 supermarket products in two departments with weighed items and promotions, plus sample users — removable in one step |
 | Settings | store profile with a live receipt preview, printer selection and silent printing, VAT, discount limit, return window, idle timeout, payment methods, edition-specific pharmacy alerts and supermarket scale/till rules — licence status shown read-only |
 | Licensing | Ed25519-signed licence, scrypt-hashed master password, sealed vendor key, expiry + renewal |
 | Audit | append-only log of sales, voids, returns, price changes, stock counts, logins, permission denials |

@@ -8,6 +8,7 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   DataTable,
   Field,
   formatDate,
@@ -66,6 +67,7 @@ export default function PurchaseOrdersPage() {
   const [note, setNote] = useState('');
   const [lines, setLines] = useState<DraftLine[]>([{ ...emptyLine }]);
   const [error, setError] = useState<string | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<PurchaseRow | null>(null);
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState<PurchaseDetail | null>(null);
   const [receiveFor, setReceiveFor] = useState<PurchaseRow | null>(null);
@@ -145,7 +147,6 @@ export default function PurchaseOrdersPage() {
   }
 
   async function cancel(order: PurchaseRow) {
-    if (!window.confirm(`Cancel order ${order.purchase_no}?`)) return;
     try {
       await call('purchases.cancelOrder', { id: order.id });
       notify('Order cancelled.', 'success');
@@ -324,7 +325,7 @@ export default function PurchaseOrdersPage() {
                         variant="ghost"
                         onClick={(event) => {
                           event.stopPropagation();
-                          void cancel(row);
+                          setConfirmCancel(row);
                         }}
                       >
                         Cancel
@@ -408,6 +409,23 @@ export default function PurchaseOrdersPage() {
             </Field>
           </div>
         </Modal>
+      ) : null}
+      {confirmCancel ? (
+        <ConfirmDialog
+          title="Cancel this order?"
+          confirmLabel="Cancel order"
+          cancelLabel="Keep order"
+          busy={busy}
+          onClose={() => setConfirmCancel(null)}
+          onConfirm={() => {
+            const order = confirmCancel;
+            setConfirmCancel(null);
+            void cancel(order);
+          }}
+        >
+          Order <strong>{confirmCancel.purchase_no}</strong> will be marked cancelled. Received stock is not affected. You
+          can raise a new order at any time.
+        </ConfirmDialog>
       ) : null}
     </div>
   );

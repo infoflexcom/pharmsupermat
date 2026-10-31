@@ -27,7 +27,8 @@
     "dist:linux": "npm run build && electron-builder --linux",
     "smoke": "tsx scripts/smoke.ts",
     "reset:data": "node scripts/reset-dev-data.mjs",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "e2e": "tsx scripts/e2e.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react';
 import { call } from '../api';
 import { useApi, useApp } from '../state';
-import { RECEIPT_LAYOUTS, type ReceiptLayout, type SettingsPayload } from '../../../shared/types';
+import {
+  RECEIPT_LAYOUTS,
+  type DemoStatus,
+  type ReceiptLayout,
+  type SettingsPayload
+} from '../../../shared/types';
 import { formatMoney, moneyToInput, parseMoneyInput } from '../../../shared/money';
-import { Alert, Badge, Button, Card, Field, Input, PageHead, Select } from '../components/ui';
+import { Alert, Badge, Button, Card, ConfirmDialog, Field, Input, PageHead, Select } from '../components/ui';
 
 const MAX_LOGO_BYTES = 200 * 1024;
 
@@ -18,6 +23,10 @@ export default function SettingsPage() {
   const [previewNote, setPreviewNote] = useState<string | null>(null);
   const [printers, setPrinters] = useState<{ name: string; displayName: string }[] | null>(null);
   const [printerNote, setPrinterNote] = useState<string | null>(null);
+  const [demo, setDemo] = useState<DemoStatus | null>(null);
+  const [demoConfirm, setDemoConfirm] = useState<'load' | 'remove' | null>(null);
+  const [demoBusy, setDemoBusy] = useState(false);
+  const [demoKept, setDemoKept] = useState<string[] | null>(null);
 
   function pickLogo(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -41,8 +50,36 @@ export default function SettingsPage() {
         setSettings(data);
         setReturnLimit(moneyToInput(data.returnLimit));
       }
+      try {
+        const status = await api<DemoStatus>('demo.status');
+        if (status) setDemo(status);
+      } catch {
+        // Demo data is an Administrator-only card; a refusal simply hides it.
+      }
     })();
   }, [api]);
+
+  async function runDemo(action: 'load' | 'remove') {
+    setDemoBusy(true);
+    try {
+      if (action === 'load') {
+        const status = await api<DemoStatus>('demo.load');
+        if (status) setDemo(status);
+        notify('Demo data loaded. Try the dashboard, the till and the reports.', 'success');
+      } else {
+        const result = await api<{ removed: number; kept: string[] }>('demo.remove');
+        const status = await api<DemoStatus>('demo.status');
+        if (status) setDemo(status);
+        setDemoKept(result?.kept ?? []);
+        notify(`${result?.removed ?? 0} demo record(s) removed.`, 'success');
+      }
+      setDemoConfirm(null);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'That did not work.', 'error');
+    } finally {
+      setDemoBusy(false);
+    }
+  }
 
   // The preview follows the draft: type a new store name and the paper changes
   // before anything is saved. Debounced so a keystroke does not spam main.
@@ -602,6 +639,97 @@ export default function SettingsPage() {
           {state?.features.prescriptions ? 'prescriptions' : ''}
         </div>
       </Card>
+
+      <Card
+        title="Demo data"
+        actions={demo?.loaded ? <Badge tone="gold">Sample data loaded</Badge> : <Badge tone="neutral">Not loaded</Badge>}
+      >
+        <div className="small muted" style={{ marginBottom: 12 }}>
+          A realistic sample shop for training or a first look. It is ordinary data — it sells, prints and reports like
+          anything else — and it can be removed in one step without touching your own records.
+        </div>
+        {demo?.loaded ? (
+          <>
+            <div className="form-grid" style={{ marginBottom: 12 }}>
+              <div>
+                <div className="tiny muted">Products</div>
+                <div style={{ fontWeight: 650 }}>{demo.products}</div>
+              </div>
+              <div>
+                <div className="tiny muted">Batches</div>
+                <div style={{ fontWeight: 650 }}>{demo.batches}</div>
+              </div>
+              {demo.departments > 0 ? (
+                <div>
+                  <div className="tiny muted">Departments</div>
+                  <div style={{ fontWeight: 650 }}>{demo.departments}</div>
+                </div>
+              ) : null}
+              {demo.promotions > 0 ? (
+                <div>
+                  <div className="tiny muted">Promotions</div>
+                  <div style={{ fontWeight: 650 }}>{demo.promotions}</div>
+                </div>
+              ) : null}
+              <div>
+                <div className="tiny muted">Sample users</div>
+                <div style={{ fontWeight: 650 }}>{demo.users}</div>
+              </div>
+            </div>
+            <Button variant="danger" onClick={() => setDemoConfirm('remove')} disabled={demoBusy}>
+              Remove demo data
+            </Button>
+            <div className="tiny muted" style={{ marginTop: 8 }}>
+              Sample sign-ins use the password <strong>{'Demo1234'}</strong> and are asked to choose their own at first
+              sign-in.
+            </div>
+          </>
+        ) : (
+          <>
+            <Button onClick={() => setDemoConfirm('load')} disabled={demoBusy}>
+              Load demo data
+            </Button>
+            <div className="tiny muted" style={{ marginTop: 8 }}>
+              {state?.features.pharmacy && state?.features.supermarket
+                ? 'Adds 90 products across both editions, with batches, departments, promotions and sample users.'
+                : state?.features.supermarket
+                  ? 'Adds 60 supermarket products across two departments, with weighed items, promotions, loyalty members and sample users.'
+                  : 'Adds 30 pharmacy products with batches, near-expiry stock and sample users.'}
+            </div>
+          </>
+        )}
+        {demoKept && demoKept.length > 0 ? (
+          <Alert tone="warn">
+            Kept {demoKept.length} demo record(s) because the shop has already used them: {demoKept.join(', ')}. Remove
+            them by hand if you really need to.
+          </Alert>
+        ) : null}
+      </Card>
+
+      {demoConfirm ? (
+        <ConfirmDialog
+          title={demoConfirm === 'load' ? 'Load demo data?' : 'Remove demo data?'}
+          confirmLabel={demoConfirm === 'load' ? 'Load sample shop' : 'Remove sample data'}
+          tone={demoConfirm === 'load' ? 'primary' : 'danger'}
+          busy={demoBusy}
+          onClose={() => setDemoConfirm(null)}
+          onConfirm={() => void runDemo(demoConfirm)}
+        >
+          {demoConfirm === 'load' ? (
+            <>
+              This adds a sample catalogue, sample users and every record they need to the live database. It is real data
+              — selling a sample product reduces its stock and appears in your reports — so load it on a shop that is not
+              trading yet, or remove it afterwards.
+            </>
+          ) : (
+            <>
+              Every product, batch, promotion, customer and sample user created by “Load demo data” is removed. Anything
+              the shop has already used (a sample product that has been sold, for example) is kept and listed for you.
+              Real records you added yourself are never touched.
+            </>
+          )}
+        </ConfirmDialog>
+      ) : null}
     </div>
   );
 }

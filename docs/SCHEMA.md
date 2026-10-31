@@ -10,7 +10,7 @@ Infoflex keeps everything in one SQLite file inside the OS application-data fold
 
 Set `INFOFLEX_DATA_DIR` to override the folder (the browser preview and the smoke test do this).
 
-Schema version: **7** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy, v4 licence_periods_hmac_and_attempt_throttle, v5 product_packs_brands_stock_counts_and_grn, v6 pos_credit_promotions_and_receipts, v7 returns_reasons_refunds_and_writeoffs.
+Schema version: **8** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy, v4 licence_periods_hmac_and_attempt_throttle, v5 product_packs_brands_stock_counts_and_grn, v6 pos_credit_promotions_and_receipts, v7 returns_reasons_refunds_and_writeoffs, v8 demo_data_register.
 
 ## Rules that apply to every table
 
@@ -23,7 +23,7 @@ Schema version: **7** (`PRAGMA user_version`), migrations: v1 initial, v2 shared
 
 ## Tables by edition
 
-- **Shared (all editions):** `users`, `roles`, `settings`, `audit_log`, `license_state`, `license_history`, `license_attempts`, `license_guard`, `held_sales`, `document_prints`, `stock_writeoffs`, `categories`, `suppliers`, `customers`, `products`, `stock_movements`, `sales`, `sale_items`, `payments`, `returns`, `return_items`, `purchases`, `purchase_items`, `day_closings`, `counters`, `sessions_meta`
+- **Shared (all editions):** `users`, `roles`, `settings`, `audit_log`, `license_state`, `license_history`, `license_attempts`, `license_guard`, `held_sales`, `document_prints`, `stock_writeoffs`, `categories`, `suppliers`, `customers`, `products`, `stock_movements`, `sales`, `sale_items`, `payments`, `returns`, `return_items`, `purchases`, `purchase_items`, `day_closings`, `counters`, `sessions_meta`, `demo_data`
 - **Pharmacy module:** `product_batches`
 - **Supermarket module:** `stock_counts`, `stock_count_items`, `departments`, `promotions`, `price_rules`, `loyalty_members`, `loyalty_transactions`, `cashier_shifts`, `cash_drawer_events`, `product_barcodes`, `product_variants`
 
@@ -578,6 +578,16 @@ Reserved internal metadata (installation notes); no business data.
 | `key` | TEXT | yes | — | PK |
 | `value` | TEXT | NOT NULL | — |  |
 
+### `demo_data`
+
+Register of rows created by "Load demo data", so they can be removed again in one step.
+
+| Column | Type | Null | Default | Key |
+| --- | --- | --- | --- | --- |
+| `entity` | TEXT | NOT NULL | — | PK |
+| `entity_id` | INTEGER | NOT NULL | — | PK |
+| `created_at` | TEXT | NOT NULL | — |  |
+
 ## Pharmacy module tables
 
 ### `product_batches`
@@ -835,6 +845,7 @@ applies every newer migration inside a transaction (rollback on error) and bumps
 | 5 | product_packs_brands_stock_counts_and_grn |
 | 6 | pos_credit_promotions_and_receipts |
 | 7 | returns_reasons_refunds_and_writeoffs |
+| 8 | demo_data_register |
 
 To add a migration: append a `{ version, name, sql }` entry, add any new table/column to
 `src/db/schema.ts`, run `npm run db:verify` (writes and reads a row in every table, checks the
@@ -847,4 +858,4 @@ manifest against the database) and `npm run db:schema` to refresh this page.
 SELECT 'sales', COUNT(*) FROM sales UNION ALL SELECT 'products', COUNT(*) FROM products;
 ```
 
-_38 tables documented; generated 2026-10-31T00:30:54.052Z by scripts/gen-schema-doc.ts._
+_39 tables documented; generated 2026-10-31T11:47:31.790Z by scripts/gen-schema-doc.ts._

@@ -7,6 +7,7 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   DataTable,
   Field,
   formatDateTime,
@@ -30,6 +31,7 @@ export default function StocktakePage() {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmPost, setConfirmPost] = useState(false);
 
   const load = useCallback(async () => {
     const rows = await api<StockCountRow[]>('stocktake.list', { limit: 40 });
@@ -91,9 +93,6 @@ export default function StocktakePage() {
 
   async function post() {
     if (!detail) return;
-    if (!window.confirm('Post this count? Stock quantities will be changed to the counted values and cannot be reverted.')) {
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
@@ -196,7 +195,7 @@ export default function StocktakePage() {
                 <Button size="sm" variant="ghost" onClick={saveProgress} disabled={busy}>
                   Save counted lines
                 </Button>
-                <Button size="sm" onClick={post} disabled={busy}>
+                <Button size="sm" onClick={() => setConfirmPost(true)} disabled={busy}>
                   Post count
                 </Button>
               </div>
@@ -285,6 +284,21 @@ export default function StocktakePage() {
             </Button>
           </div>
         </Card>
+      ) : null}
+      {confirmPost ? (
+        <ConfirmDialog
+          title="Post this count?"
+          confirmLabel="Post count"
+          busy={busy}
+          onClose={() => setConfirmPost(false)}
+          onConfirm={() => {
+            setConfirmPost(false);
+            void post();
+          }}
+        >
+          Stock quantities are changed to the counted values and the difference is written to the ledger and the audit
+          trail. A posted count cannot be reverted — correct a mistake with a stock adjustment instead.
+        </ConfirmDialog>
       ) : null}
     </div>
   );
