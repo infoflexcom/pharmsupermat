@@ -451,6 +451,51 @@ async function main() {
     assert(/^CN-/.test(outcome.value.creditNoteNo), 'credit note number');
   });
 
+  await check('returns desk opens a receipt and writes off damaged goods', async () => {
+    const sale = await api<{ id: number; receiptNo: string; items: { id: number }[] }>('sales.create', {
+      docType: 'RECEIPT',
+      lines: [{ productId: 2, qty: 2 }],
+      prescriptionRef: 'RX-SMOKE-7',
+      paymentMethod: 'CASH',
+      amountPaid: 500_000
+    });
+    const opened = await api<{
+      windowDays: number;
+      withinWindow: boolean;
+      items: { saleItemId: number; returnableQty: number; refundPerUnit: number }[];
+    }>('returns.lookup', { receiptNo: sale.receiptNo.toLowerCase() });
+    assert(opened.withinWindow === true, 'window');
+    assert(opened.windowDays === 7, `window days ${opened.windowDays}`);
+    assert(opened.items[0].returnableQty === 2, 'returnable qty');
+
+    const outcome = await api<{ value: { id: number; creditNoteNo: string; items: { restock: boolean }[] }; pending: boolean }>(
+      'returns.create',
+      {
+        receiptNo: sale.receiptNo,
+        reasonCode: 'DAMAGED',
+        reason: 'Crushed pack',
+        returnType: 'REFUND',
+        refundMethod: 'CASH',
+        lines: [{ saleItemId: sale.items[0].id, qty: 1, resellable: false }]
+      }
+    );
+    assert(outcome.pending === false, 'return pending');
+    assert(outcome.value.items[0].restock === false, 'damaged line restocked');
+
+    const writeoffs = await api<{ productId: number; qty: number; reasonCode: string }[]>('returns.writeoffs', {});
+    assert(
+      writeoffs.some((row) => row.productId === 2 && row.qty === 1 && row.reasonCode === 'DAMAGED'),
+      'write-off missing'
+    );
+
+    const settings = await api<{ storeName: string }>('settings.read');
+    const printed = await api<{ html: string; duplicate: boolean }>('returns.print', { id: outcome.value.id });
+    assert(printed.html.includes(settings.storeName), 'credit note store name');
+    assert(printed.duplicate === false, 'first print duplicated');
+    const again = await api<{ duplicate: boolean }>('returns.print', { id: outcome.value.id });
+    assert(again.duplicate === true, 'reprint not marked');
+  });
+
   await check('void marks the sale void (never deletes it) and restores stock', async () => {
     const before = await api<{ stockQty: number }>('products.get', { id: 1 });
     const sale = await api<{ items: { id: number }[] }>('sales.get', { id: saleId });

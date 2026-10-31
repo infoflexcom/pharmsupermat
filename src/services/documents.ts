@@ -1,4 +1,4 @@
-import type { ReceiptLayout, Sale, SaleReturn, StoreProfile } from '../shared/types';
+import { RETURN_REASONS, type ReceiptLayout, type Sale, type SaleReturn, type StoreProfile } from '../shared/types';
 import { formatMoney } from '../shared/money';
 
 /**
@@ -417,18 +417,25 @@ export function buildCreditNoteDocument(
   options: { duplicate?: boolean; poweredBy?: boolean } = {}
 ): string {
   const items = ret.items ?? [];
+  const typeLabel =
+    ret.returnType === 'STORE_CREDIT' ? 'Store credit' : ret.returnType === 'EXCHANGE' ? 'Exchange' : 'Refund';
+  const reasonLabel = RETURN_REASONS.find((r) => r.value === ret.reasonCode)?.label ?? 'Return';
   const rows = items
     .map(
       (item, index) => `
       <tr>
         <td>${index + 1}</td>
-        <td>${escapeHtml(item.name)}</td>
+        <td>${escapeHtml(item.name)}${
+          item.resellable ? '' : '<br /><span class="meta">Not resellable — written off</span>'
+        }</td>
         <td class="num">${formatQty(item.qty, item.isWeighed)}</td>
-        <td class="num">${formatMoney(item.unitPrice)}</td>
+        <td class="num">${formatMoney(item.unitPrice)}${item.isWeighed ? '<span class="meta">/kg</span>' : ''}</td>
         <td class="num">${formatMoney(item.lineTotal)}</td>
+        <td class="num">${formatMoney(item.netTotal)}</td>
       </tr>`
     )
     .join('');
+
   const badge =
     ret.status === 'PENDING'
       ? '<span class="badge pending">Pending approval</span>'
@@ -436,6 +443,19 @@ export function buildCreditNoteDocument(
         ? '<span class="badge void">Rejected</span>'
         : '';
   const duplicate = options.duplicate ? '<span class="badge duplicate">Duplicate</span>' : '';
+  const reversalRows = [
+    ret.promoReversed ? `<div class="row"><span>Promotion reversed</span><span>-${formatMoney(ret.promoReversed)}</span></div>` : '',
+    ret.discountReversed ? `<div class="row"><span>Discount reversed</span><span>-${formatMoney(ret.discountReversed)}</span></div>` : '',
+    ret.loyaltyPointsReversed
+      ? `<div class="row"><span>Loyalty points reversed</span><span>${ret.loyaltyPointsReversed}</span></div>`
+      : '',
+    ret.loyaltyValueReversed
+      ? `<div class="row"><span>Points value</span><span>${formatMoney(ret.loyaltyValueReversed)}</span></div>`
+      : ''
+  ]
+    .filter(Boolean)
+    .join('');
+
   const body = `
     ${storeHeader({
       name: ret.storeName,
@@ -456,20 +476,30 @@ export function buildCreditNoteDocument(
     <div class="meta">
       <div>Original receipt: <strong>${escapeHtml(ret.saleReceiptNo)}</strong></div>
       ${ret.customerName ? `<div>Customer: <strong>${escapeHtml(ret.customerName)}</strong></div>` : ''}
-      <div>Reason: ${escapeHtml(ret.reason)}</div>
-      <div>Requested by: ${escapeHtml(ret.requestedByName)}</div>
+      <div>Type: <strong>${escapeHtml(typeLabel)}</strong>${ret.refundMethod ? ` &middot; ${escapeHtml(PAYMENT_LABELS[ret.refundMethod] ?? ret.refundMethod)}` : ''}</div>
+      <div>Reason: ${escapeHtml(reasonLabel)} — ${escapeHtml(ret.reason)}</div>
+      ${ret.exchangeNote ? `<div>Exchange: ${escapeHtml(ret.exchangeNote)}</div>` : ''}
+      <div>Processed by: ${escapeHtml(ret.requestedByName)}</div>
       ${ret.approvedByName ? `<div>Approved by: ${escapeHtml(ret.approvedByName)}</div>` : ''}
+      ${ret.windowOverride ? '<div>Outside the return window: administrator override</div>' : ''}
     </div>
     <table>
-      <thead><tr><th>#</th><th>Item</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Credit</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="5">No items</td></tr>'}</tbody>
+      <thead>
+        <tr><th>#</th><th>Item</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Line value</th><th class="num">Credit</th></tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="6">No items</td></tr>'}</tbody>
     </table>
+    ${reversalRows ? `<div class="totals">${reversalRows}</div>` : ''}
     <div class="totals">
-      <div class="row grand"><span>Total credited</span><span>${formatMoney(ret.total)}</span></div>
+      <div class="row grand"><span>Total ${typeLabel.toLowerCase()}</span><span>${formatMoney(ret.total)}</span></div>
     </div>
+    ${ret.status === 'REJECTED' ? `<div class="meta" style="margin-top:12px"><strong>REJECTED:</strong> ${escapeHtml(ret.rejectReason ?? '')}</div>` : ''}
     <div class="sign"><div>Customer signature</div><div>Authorised signature</div></div>
     <div class="footer">
-      ${store?.thankYouNote ? escapeHtml(store.thankYouNote) + '<br />' : ''}
+      ${footerText(store)}<br />
+      Keep this credit note for your records. Goods sold in good condition; returns accepted within ${
+        store?.returnWindowDays ?? 7
+      } days with the original receipt.
       ${options.poweredBy === false ? '' : poweredByLine(productName)}
     </div>`;
   return wrapper(`Credit Note ${ret.creditNoteNo ?? ''}`, body);

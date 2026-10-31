@@ -103,13 +103,14 @@ describe('products, packs and stock control', () => {
       { id: sale.id },
       admin.token
     );
-    const returned = await callOk<{ value: { total: number; items: { qty: number; lineTotal: number }[] } }>(
+    const returned = await callOk<{ value: { total: number; items: { qty: number; netTotal: number }[] } }>(
       h,
       'returns.create',
       { saleId: sale.id, lines: [{ saleItemId: saleItems.items[0].id, qty: 500 }], reason: 'Customer changed mind' },
       admin.token
     );
-    expect(returned.value.items[0].lineTotal).toBe(60_000);
+    // lineTotal keeps the original line value; netTotal is the credit for 500 g.
+    expect(returned.value.items[0].netTotal).toBe(60_000);
     expect(returned.value.total).toBe(60_000);
     h.close();
   });

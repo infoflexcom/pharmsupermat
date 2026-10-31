@@ -73,7 +73,11 @@ import {
   approveReturn,
   createReturn,
   getReturn,
+  getWriteoff,
   listReturns,
+  listWriteoffs,
+  lookupSaleForReturn,
+  printReturnDocument,
   rejectReturn
 } from '../../services/returns';
 import { buildReport } from '../../services/reports';
@@ -938,6 +942,20 @@ export const CORE_HANDLERS: Handler[] = [
 
   /* ---------------- returns ---------------- */
   {
+    channel: 'returns.lookup',
+    permission: 'returns.create',
+    handler: (args) => {
+      const session = requireSession(args);
+      const settings = getAllSettings(args.ctx.db);
+      return lookupSaleForReturn(
+        args.ctx.db,
+        payloadOf<{ saleId?: number; receiptNo?: string }>(args),
+        salesActor(session),
+        { returnLimit: settings.returnLimit, returnWindowDays: settings.returnWindowDays }
+      );
+    }
+  },
+  {
     channel: 'returns.create',
     permission: 'returns.create',
     handler: (args) => {
@@ -946,7 +964,8 @@ export const CORE_HANDLERS: Handler[] = [
         args.ctx.db,
         payloadOf<Parameters<typeof createReturn>[1]>(args),
         salesActor(session),
-        getStoreProfile(args.ctx.db)
+        getStoreProfile(args.ctx.db),
+        args.features
       );
     }
   },
@@ -977,7 +996,7 @@ export const CORE_HANDLERS: Handler[] = [
     permission: 'returns.approve',
     handler: (args) => {
       const session = requireSession(args);
-      return approveReturn(args.ctx.db, payloadOf<{ id: number }>(args).id, salesActor(session));
+      return approveReturn(args.ctx.db, payloadOf<{ id: number }>(args).id, salesActor(session), args.features);
     }
   },
   {
@@ -991,12 +1010,50 @@ export const CORE_HANDLERS: Handler[] = [
   },
   {
     channel: 'returns.document',
+    // Preview only: prints go through returns.print so the trail is written.
     handler: (args) => {
       requireSession(args);
       const ret = getReturn(args.ctx.db, payloadOf<{ id: number }>(args).id);
-      const html = buildCreditNoteDocument(ret, getStoreProfile(args.ctx.db), args.features.productName);
+      const settings = getAllSettings(args.ctx.db);
+      const html = buildCreditNoteDocument(ret, getStoreProfile(args.ctx.db), args.features.productName, {
+        poweredBy: settings.poweredByFooter
+      });
       return { html, creditNote: ret };
     }
+  },
+  {
+    channel: 'returns.print',
+    permission: 'returns.create',
+    handler: (args) => {
+      const session = requireSession(args);
+      const ret = getReturn(args.ctx.db, payloadOf<{ id: number }>(args).id);
+      if (
+        ret.requestedBy !== session.userId &&
+        ret.approvedBy !== session.userId &&
+        !session.permissions.includes('reports.view.all')
+      ) {
+        throw new AppError('FORBIDDEN', 'You can only print returns you handled.');
+      }
+      const settings = getAllSettings(args.ctx.db);
+      return printReturnDocument(
+        args.ctx.db,
+        payloadOf<{ id: number }>(args),
+        actor(session),
+        args.features.productName,
+        { poweredBy: settings.poweredByFooter, store: getStoreProfile(args.ctx.db) }
+      );
+    }
+  },
+  {
+    channel: 'returns.writeoffs',
+    permission: 'reports.view.all',
+    handler: (args) =>
+      listWriteoffs(args.ctx.db, payloadOf<{ from?: string; to?: string; limit?: number }>(args) ?? {})
+  },
+  {
+    channel: 'returns.writeoff',
+    permission: 'reports.view.all',
+    handler: (args) => getWriteoff(args.ctx.db, payloadOf<{ id: number }>(args).id)
   },
 
   /* ---------------- reports & dashboard ---------------- */

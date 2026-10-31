@@ -419,3 +419,70 @@ Verified on the same headless Linux sandbox.
 - A physical thermal printer, ESC/POS commands and the cash-drawer kick-out: the layouts print through Chromium’s dialog, so the operator picks the 80mm/58mm paper size once. The drawer log is financial only.
 - The customer display is a full-screen panel on the same machine; a second physical monitor needs a second window (see DECISIONS §34).
 - No Electron window, NSIS installer or wine in this sandbox — same limitation as every earlier phase.
+
+---
+
+# Phase 7 verification — returns, refunds and credit notes
+
+## Requirement checklist
+
+### Returns (shared)
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Look the original sale up by receipt number | ✅ | `returns.lookup` accepts `receiptNo` (case-insensitive) or `saleId` and returns the sale, per-line `returnableQty`, credit per unit/kg, batch and its expiry, age, window and limit; test “opens a receipt by number …” plus the live runs on both editions |
+| Full or partial returns per item | ✅ | Per-line quantity capped at `sold − already returned` (completed **and** pending), checked again inside the transaction; test “never returns more than was sold …” and the live over-return check |
+| Never more than the quantity originally sold | ✅ | Second attempt at the same units returns `VALIDATION` “at most 0”, and the lookup then reports `returnableQty 0` / `returnableValue 0` |
+| Reasons: wrong item, damaged, expired, changed mind, other | ✅ | `RETURN_REASONS` stored as `returns.reason_code` / `return_items.reason_code`; “other” requires a note; labels printed on the credit note |
+| Types: refund, store credit, exchange | ✅ | `RETURN_TYPES`; store credit forces `refund_method = 'STORE_CREDIT'`, exchange requires the replacement note; test “marks store credit and exchange correctly” and live |
+| Resellable goods return to stock (pharmacy: original batch) | ✅ | `receiveStock(..., batchNo from the sale line, type RETURN, refId return + batch_id)`; test asserts `AMX-EARLY` goes back to 2 and the movement is linked; live supermarket restock 27 → 28 |
+| Non-resellable goods go to a write-off record | ✅ | `stock_writeoffs` row per line at `cost_price × qty`, `return_items.writeoff_id`, audit `return.writeoff`, register via `returns.writeoffs`; tests and live (2 lines, ₦1,000.00 at cost) |
+
+### Policy (shared)
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Configurable return window (default 7 days) | ✅ | `settings.return_window_days`, surfaced by lookup; test ages a sale 10 days and gets `withinWindow: false` |
+| Administrator override of the window | ✅ | `pos.approve` purpose `RETURN_WINDOW` (needs `settings.manage`), single-use token consumed by `returns.create`, `window_override = 1`, `approved_via = 'PIN'`; test proves a supervisor is refused and an administrator is allowed |
+| Returns above an Admin-set value need approval | ✅ | `settings.return_limit` (default ₦20,000); above it a cashier is queued as `PENDING`, or completes immediately with a `RETURN` token from a supervisor/administrator; tests cover both paths, live covers both paths |
+| Password / PIN prompt at the desk | ✅ | Approvals modal on the returns page posts to `pos.approve` and submits straight away with the issued token; approver passwords are verified with scrypt and never stored |
+| Pharmacy: expired or opened goods never back on the shelf | ✅ | `resellableFor()` forces a write-off for the *expired* reason, for `condition = OPENED` on pharmacy licences and for a batch past its expiry; test + live pharmacy run |
+| Supermarket: loyalty and promotions reversed proportionally | ✅ | `promo_reversed`, `discount_reversed`, `loyalty_points_reversed`, `loyalty_value_reversed` use `returned_basis ÷ all_basis`; the loyalty ledger gets a negative row; test returns a third of a 10% promo (₦100 of ₦300) and 9 of 27 points |
+
+### Documents and records
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Print a return / credit note | ✅ | `returns.print` returns HTML, logs `document_prints` (`kind = 'RETURN'`, `return_id`) and stamps every print after the first **DUPLICATE**; `returns.document` is preview-only |
+| Same store-name header as receipts, from the sale's snapshot | ✅ | `returns.store_*` copied from the sale; test renames the shop and the credit note still shows the old name; live asserts the printed HTML contains the store name |
+| Log everything | ✅ | Audit `return.create` / `return.request` / `return.complete` / `return.reject` / `return.print` / `return.reprint` / `return.writeoff` / `pos.approval`, all with the receipt number, lines, reason, type and reversals |
+| DB transactions | ✅ | Lookup is read-only; creation + completion (stock, write-offs, loyalty, credit-note number) run inside `db.transaction`, so a failure leaves no half-return |
+| Returns never delete a sale | ✅ | The return links by `sale_id`; the sale row is untouched, and voiding (the only way to reverse a sale) remains a separate audited action |
+
+### DONE WHEN
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| Over-return scenario tested and passing | ✅ | `tests/returns-phase7.test.ts` “never returns more than was sold, across several returns and pending ones” |
+| Window scenario tested and passing | ✅ | “blocks returns outside the window until an administrator overrides it” (10-day-old sale, supervisor refused, admin token accepted) |
+| Approval scenario tested and passing | ✅ | “asks a supervisor to approve returns above the limit, by PIN or by queue” (pending → approve, and immediate PIN completion) |
+| Loyalty reversal scenario tested and passing | ✅ | “reverses promotions and loyalty points proportionally (supermarket)” — 27 → 18 → 0 points, promo ₦300 → ₦100 → ₦200 |
+| Stock-effect scenario tested and passing | ✅ | “restocks resellable goods to their batch and writes off the rest (pharmacy)” — batch restock, write-off at cost, expired and opened rules |
+| The credit note shows the store name | ✅ | “prints a credit note with the original store name …” and the live print on both editions |
+
+## Verification run
+
+- `npm run typecheck` — clean (node + web, strict, `noUnusedLocals`).
+- `VENDOR_MASTER_PASSWORD=... npm test` — 16 files, **142 tests passed** (10 new phase-7 API tests; the weighed-return test now asserts `netTotal`).
+- `npm run db:verify` — **190 checks, 0 failed** (38 tables, schema v7, including `stock_writeoffs`, the pending/approved return paths and the credit-note print trail).
+- `VENDOR_MASTER_PASSWORD=... npm run verify:secrets` — PASS (146 files scanned).
+- `npm run db:schema` — regenerated `docs/SCHEMA.md` (38 tables).
+- `BASE_URL=... npm run smoke` (fresh data dir) — **42/42 passed**, including the new “returns desk opens a receipt and writes off damaged goods” check.
+- Live walk-through on the browser harness — **17/17 checks** (9 supermarket on :4180, 8 pharmacy on :4183): receipt lookup by number, partial restock, over-return refusal, costed write-off, credit note with the store name + DUPLICATE reprint, store credit and exchange, pending/PIN approvals, supervisor refused the window override, expired and opened pharmacy goods written off.
+- `npm run build` — main 253.12 kB, preload 0.64 kB, renderer 1,064.83 kB + 32.33 kB CSS.
+
+## What was not verified here
+
+- The aged-receipt window override in a live run: there is no channel that ages a sale, so it is proven in the test suite (and the verifier) rather than through the harness.
+- Loyalty/promotion reversal live: the supermarket promotion and loyalty screens reach `mart.*` channels that arrive in the supermarket phase, so this phase proves the reversal through service-level tests.
+- A physical printer: the credit note prints through the same Chromium preview/dialog as receipts; no thermal hardware in the sandbox.

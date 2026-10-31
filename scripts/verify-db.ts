@@ -22,7 +22,7 @@ import { getAllSettings, getStoreProfile, updateSettings } from '../src/services
 import { createProduct, packsToUnits, redactCostsDeep } from '../src/services/products';
 import { createStockCount, postStockCount, saveStockCountEntries } from '../src/services/stocktake';
 import { createSale } from '../src/services/sales';
-import { createReturn, approveReturn } from '../src/services/returns';
+import { createReturn, approveReturn, printReturnDocument } from '../src/services/returns';
 import { createPurchase } from '../src/services/purchases';
 import {
   saveCategory,
@@ -205,18 +205,71 @@ function main(): number {
     check('money is integer kobo', Number.isInteger(firstSale.total));
     check('stock decremented', repos.products.findById(product.id)!.id === product.id);
 
-    /* ---- returns ---- */
+    /* ---- returns: one resellable line, one written off ---- */
     const saleItemId = firstSale.items![0].id;
     const outcome = createReturn(
       db,
-      { saleId: firstSale.id, reason: 'Customer brought one back', lines: [{ saleItemId, qty: 1 }] },
+      {
+        saleId: firstSale.id,
+        reasonCode: 'CHANGED_MIND',
+        reason: 'Customer brought one back',
+        returnType: 'REFUND',
+        refundMethod: 'CASH',
+        lines: [{ saleItemId, qty: 1, resellable: true }]
+      },
       salesActor,
-      getStoreProfile(db)
+      getStoreProfile(db),
+      features
     );
-    const returnId = (outcome as { return?: { id: number } }).return?.id ?? (outcome as { id?: number }).id;
-    if (returnId) approveReturn(db, returnId, salesActor);
-    check('returns recorded', repos.returns.count() >= 1);
-    check('return items recorded', repos.returnItems.count() >= 1);
+    check('return completes for an approver', outcome.pending === false && outcome.value.status === 'COMPLETED');
+    check('credit note numbered', /^CN-\d{6}$/.test(outcome.value.creditNoteNo ?? ''), outcome.value.creditNoteNo ?? '');
+
+    const damaged = createReturn(
+      db,
+      {
+        saleId: firstSale.id,
+        reasonCode: 'DAMAGED',
+        reason: 'Pack crushed in the bag',
+        returnType: 'REFUND',
+        refundMethod: 'CASH',
+        lines: [{ saleItemId, qty: 1, resellable: false }]
+      },
+      salesActor,
+      getStoreProfile(db),
+      features
+    );
+    check('damaged line written off', repos.stockWriteoffs.count() >= 1);
+    check('write-off linked to the return line', Boolean(damaged.value.items?.[0].writeoffId));
+    check('written-off line not restocked', damaged.value.items?.[0].restock === false);
+
+    const pendingReturn = createReturn(
+      db,
+      {
+        saleId: secondSale.id,
+        reasonCode: 'OTHER',
+        reason: 'Waiting for the supervisor',
+        lines: [{ saleItemId: secondSale.items![0].id, qty: 1, resellable: true }]
+      },
+      { userId: 2, username: 'cashier', permissions: ['pos.sell', 'returns.create'] },
+      getStoreProfile(db),
+      features
+    );
+    if (pendingReturn.pending) {
+      const approved = approveReturn(db, pendingReturn.value.id, salesActor, features);
+      check('pending return approved', approved.status === 'COMPLETED');
+    }
+    check('returns recorded', repos.returns.count() >= 3);
+    check('return items recorded', repos.returnItems.count() >= 3);
+    const creditNote = printReturnDocument(
+      db,
+      { id: outcome.value.id },
+      actor,
+      'Infoflex',
+      { poweredBy: true, store: getStoreProfile(db) }
+    );
+    check('credit note shows the store name', creditNote.html.includes('Infoflex Test Store'));
+    check('first credit note print is original', creditNote.duplicate === false);
+    check('print trail exists for credit notes', repos.documentPrints.count() >= 1);
 
     /* ---- supermarket module ---- */
     saveDepartment(db, { name: 'Provisions', description: 'Rice, oil, tinned goods' }, actor);
@@ -251,7 +304,7 @@ function main(): number {
     check('first print is an original', printed.duplicate === false);
     const reprinted = printSaleDocument(db, { id: firstSale.id }, salesActor, features);
     check('second print is a duplicate', reprinted.duplicate === true);
-    check('prints logged', repos.documentPrints.count({ sale_id: firstSale.id }) === 2);
+    check('prints logged', repos.documentPrints.count({ sale_id: firstSale.id, kind: 'SALE' }) === 2);
 
     /* ---- day closing ---- */
     const closing = closeDay(

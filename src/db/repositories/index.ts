@@ -80,16 +80,26 @@ export interface HeldSaleRow {
 export interface DocumentPrintRow {
   id: number; sale_id: number; layout: string; duplicate: number;
   user_id: number | null; username: string | null; created_at: string;
+  return_id: number | null; kind: string;
 }
 export interface ReturnRow {
   id: number; credit_note_no: string | null; sale_id: number; customer_name: string | null;
   reason: string; total: number; status: 'PENDING' | 'COMPLETED' | 'REJECTED';
   requested_by: number; requested_at: string; approved_by: number | null; approved_at: string | null;
   reject_reason: string | null; store_name: string; store_address: string; store_phone: string;
+  return_type: 'REFUND' | 'STORE_CREDIT' | 'EXCHANGE'; reason_code: string; sale_receipt_no: string | null;
+  refund_method: string | null; exchange_note: string | null; discount_reversed: number; promo_reversed: number;
+  loyalty_points_reversed: number; loyalty_value_reversed: number; window_override: number; approved_via: string | null;
 }
 export interface ReturnItemRow {
   id: number; return_id: number; sale_item_id: number; product_id: number; name: string; qty: number;
   unit_price: number; line_total: number; batch_id: number | null; cost_price: number; restock: number;
+  reason_code: string; resellable: number; net_total: number; writeoff_id: number | null;
+}
+export interface StockWriteoffRow {
+  id: number; return_id: number | null; product_id: number; batch_id: number | null; batch_no: string | null;
+  qty: number; cost_price: number; value: number; reason_code: string; reason: string | null;
+  user_id: number | null; username: string | null; created_at: string;
 }
 export interface PurchaseRow {
   grn_no: string | null;
@@ -193,6 +203,7 @@ export interface Repositories {
   productVariants: Table<ProductVariantRow>;
   heldSales: Table<HeldSaleRow>;
   documentPrints: Table<DocumentPrintRow>;
+  stockWriteoffs: Table<StockWriteoffRow>;
 }
 
 /**
@@ -269,12 +280,12 @@ export function createRepositories(db: Database): Repositories {
     }),
     returns: new Table<ReturnRow>(db, {
       table: 'returns',
-      columns: P<ReturnRow>(['id', 'credit_note_no', 'sale_id', 'customer_name', 'reason', 'total', 'status', 'requested_by', 'requested_at', 'approved_by', 'approved_at', 'reject_reason', 'store_name', 'store_address', 'store_phone']),
+      columns: P<ReturnRow>(['id', 'credit_note_no', 'sale_id', 'customer_name', 'reason', 'total', 'status', 'requested_by', 'requested_at', 'approved_by', 'approved_at', 'reject_reason', 'store_name', 'store_address', 'store_phone', 'return_type', 'reason_code', 'sale_receipt_no', 'refund_method', 'exchange_note', 'discount_reversed', 'promo_reversed', 'loyalty_points_reversed', 'loyalty_value_reversed', 'window_override', 'approved_via']),
       orderBy: 'id DESC'
     }),
     returnItems: new Table<ReturnItemRow>(db, {
       table: 'return_items',
-      columns: P<ReturnItemRow>(['id', 'return_id', 'sale_item_id', 'product_id', 'name', 'qty', 'unit_price', 'line_total', 'batch_id', 'cost_price', 'restock']),
+      columns: P<ReturnItemRow>(['id', 'return_id', 'sale_item_id', 'product_id', 'name', 'qty', 'unit_price', 'line_total', 'batch_id', 'cost_price', 'restock', 'reason_code', 'resellable', 'net_total', 'writeoff_id']),
       orderBy: 'id'
     }),
     purchases: new Table<PurchaseRow>(db, {
@@ -344,9 +355,14 @@ export function createRepositories(db: Database): Repositories {
       columns: P<HeldSaleRow>(['id', 'hold_no', 'label', 'payload', 'lines_count', 'total', 'customer_name', 'user_id', 'username', 'created_at']),
       orderBy: 'created_at DESC'
     }),
+    stockWriteoffs: new Table<StockWriteoffRow>(db, {
+      table: 'stock_writeoffs',
+      columns: P<StockWriteoffRow>(['id', 'return_id', 'product_id', 'batch_id', 'batch_no', 'qty', 'cost_price', 'value', 'reason_code', 'reason', 'user_id', 'username', 'created_at']),
+      orderBy: 'id DESC'
+    }),
     documentPrints: new Table<DocumentPrintRow>(db, {
       table: 'document_prints',
-      columns: P<DocumentPrintRow>(['id', 'sale_id', 'layout', 'duplicate', 'user_id', 'username', 'created_at']),
+      columns: P<DocumentPrintRow>(['id', 'sale_id', 'layout', 'duplicate', 'user_id', 'username', 'created_at', 'return_id', 'kind']),
       orderBy: 'id DESC'
     }),
     productVariants: new Table<ProductVariantRow>(db, {

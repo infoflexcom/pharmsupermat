@@ -10,7 +10,7 @@ Infoflex keeps everything in one SQLite file inside the OS application-data fold
 
 Set `INFOFLEX_DATA_DIR` to override the folder (the browser preview and the smoke test do this).
 
-Schema version: **6** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy, v4 licence_periods_hmac_and_attempt_throttle, v5 product_packs_brands_stock_counts_and_grn, v6 pos_credit_promotions_and_receipts.
+Schema version: **7** (`PRAGMA user_version`), migrations: v1 initial, v2 shared_catalogue_partners_documents_and_edition_modules, v3 account_lockout_store_profile_and_idle_policy, v4 licence_periods_hmac_and_attempt_throttle, v5 product_packs_brands_stock_counts_and_grn, v6 pos_credit_promotions_and_receipts, v7 returns_reasons_refunds_and_writeoffs.
 
 ## Rules that apply to every table
 
@@ -23,7 +23,7 @@ Schema version: **6** (`PRAGMA user_version`), migrations: v1 initial, v2 shared
 
 ## Tables by edition
 
-- **Shared (all editions):** `users`, `roles`, `settings`, `audit_log`, `license_state`, `license_history`, `license_attempts`, `license_guard`, `held_sales`, `document_prints`, `categories`, `suppliers`, `customers`, `products`, `stock_movements`, `sales`, `sale_items`, `payments`, `returns`, `return_items`, `purchases`, `purchase_items`, `day_closings`, `counters`, `sessions_meta`
+- **Shared (all editions):** `users`, `roles`, `settings`, `audit_log`, `license_state`, `license_history`, `license_attempts`, `license_guard`, `held_sales`, `document_prints`, `stock_writeoffs`, `categories`, `suppliers`, `customers`, `products`, `stock_movements`, `sales`, `sale_items`, `payments`, `returns`, `return_items`, `purchases`, `purchase_items`, `day_closings`, `counters`, `sessions_meta`
 - **Pharmacy module:** `product_batches`
 - **Supermarket module:** `stock_counts`, `stock_count_items`, `departments`, `promotions`, `price_rules`, `loyalty_members`, `loyalty_transactions`, `cashier_shifts`, `cash_drawer_events`, `product_barcodes`, `product_variants`
 
@@ -189,7 +189,7 @@ Indexes: `idx_held_sales_created`
 
 ### `document_prints`
 
-Every receipt/invoice print, layout and DUPLICATE reprint trail.
+Every receipt/invoice/credit-note print, layout and DUPLICATE reprint trail.
 
 | Column | Type | Null | Default | Key |
 | --- | --- | --- | --- | --- |
@@ -200,8 +200,32 @@ Every receipt/invoice print, layout and DUPLICATE reprint trail.
 | `user_id` | INTEGER | yes | — |  |
 | `username` | TEXT | yes | — |  |
 | `created_at` | TEXT | NOT NULL | — |  |
+| `return_id` | INTEGER | yes | — |  |
+| `kind` | TEXT | NOT NULL | `'SALE'` |  |
 
 Indexes: `idx_document_prints_sale`
+
+### `stock_writeoffs`
+
+Returned goods that cannot be resold (damaged, expired, opened), valued at cost.
+
+| Column | Type | Null | Default | Key |
+| --- | --- | --- | --- | --- |
+| `id` | INTEGER | yes | — | PK |
+| `return_id` | INTEGER | yes | — |  |
+| `product_id` | INTEGER | NOT NULL | — |  |
+| `batch_id` | INTEGER | yes | — |  |
+| `batch_no` | TEXT | yes | — |  |
+| `qty` | INTEGER | NOT NULL | — |  |
+| `cost_price` | INTEGER | NOT NULL | `0` |  |
+| `value` | INTEGER | NOT NULL | `0` |  |
+| `reason_code` | TEXT | NOT NULL | `'OTHER'` |  |
+| `reason` | TEXT | yes | — |  |
+| `user_id` | INTEGER | yes | — |  |
+| `username` | TEXT | yes | — |  |
+| `created_at` | TEXT | NOT NULL | — |  |
+
+Indexes: `idx_writeoffs_product`, `idx_writeoffs_return`
 
 ### `categories`
 
@@ -428,6 +452,17 @@ Returns/credit notes with approval state and store snapshot.
 | `store_name` | TEXT | NOT NULL | — |  |
 | `store_address` | TEXT | NOT NULL | — |  |
 | `store_phone` | TEXT | NOT NULL | — |  |
+| `return_type` | TEXT | NOT NULL | `'REFUND'` |  |
+| `reason_code` | TEXT | NOT NULL | `'OTHER'` |  |
+| `sale_receipt_no` | TEXT | yes | — |  |
+| `refund_method` | TEXT | yes | — |  |
+| `exchange_note` | TEXT | yes | — |  |
+| `discount_reversed` | INTEGER | NOT NULL | `0` |  |
+| `promo_reversed` | INTEGER | NOT NULL | `0` |  |
+| `loyalty_points_reversed` | INTEGER | NOT NULL | `0` |  |
+| `loyalty_value_reversed` | INTEGER | NOT NULL | `0` |  |
+| `window_override` | INTEGER | NOT NULL | `0` |  |
+| `approved_via` | TEXT | yes | — |  |
 
 Indexes: `idx_returns_credit_note`, `idx_returns_sale`, `idx_returns_status`
 
@@ -448,6 +483,10 @@ Returned quantities per sale line, with restock flag.
 | `batch_id` | INTEGER | yes | — |  |
 | `cost_price` | INTEGER | NOT NULL | `0` |  |
 | `restock` | INTEGER | NOT NULL | `1` |  |
+| `reason_code` | TEXT | NOT NULL | `'OTHER'` |  |
+| `resellable` | INTEGER | NOT NULL | `1` |  |
+| `net_total` | INTEGER | NOT NULL | `0` |  |
+| `writeoff_id` | INTEGER | yes | — |  |
 
 Indexes: `idx_return_items_return`
 
@@ -795,6 +834,7 @@ applies every newer migration inside a transaction (rollback on error) and bumps
 | 4 | licence_periods_hmac_and_attempt_throttle |
 | 5 | product_packs_brands_stock_counts_and_grn |
 | 6 | pos_credit_promotions_and_receipts |
+| 7 | returns_reasons_refunds_and_writeoffs |
 
 To add a migration: append a `{ version, name, sql }` entry, add any new table/column to
 `src/db/schema.ts`, run `npm run db:verify` (writes and reads a row in every table, checks the
@@ -807,4 +847,4 @@ manifest against the database) and `npm run db:schema` to refresh this page.
 SELECT 'sales', COUNT(*) FROM sales UNION ALL SELECT 'products', COUNT(*) FROM products;
 ```
 
-_37 tables documented; generated 2026-10-30T23:46:37.044Z by scripts/gen-schema-doc.ts._
+_38 tables documented; generated 2026-10-31T00:30:54.052Z by scripts/gen-schema-doc.ts._

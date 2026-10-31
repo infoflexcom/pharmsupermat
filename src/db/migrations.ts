@@ -764,6 +764,64 @@ export const MIGRATIONS: Migration[] = [
         ('loyalty_point_value', '100', datetime('now')),
         ('loyalty_redeem_enabled', 'true', datetime('now'));
     `
+  },
+  {
+    version: 7,
+    name: 'returns_reasons_refunds_and_writeoffs',
+    sql: /* sql */ `
+      /* ---------------------------------------------------------------- *
+       * Returns: fixed reason codes, refund/store-credit/exchange types,  *
+       * proportional loyalty and promotion reversal, and a write-off     *
+       * record for goods that cannot go back on the shelf.               *
+       * ---------------------------------------------------------------- */
+      ALTER TABLE returns ADD COLUMN return_type TEXT NOT NULL DEFAULT 'REFUND';
+      ALTER TABLE returns ADD COLUMN reason_code TEXT NOT NULL DEFAULT 'OTHER';
+      ALTER TABLE returns ADD COLUMN sale_receipt_no TEXT;
+      ALTER TABLE returns ADD COLUMN refund_method TEXT;
+      ALTER TABLE returns ADD COLUMN exchange_note TEXT;
+      /* Proportional reversals, computed when the return completes. */
+      ALTER TABLE returns ADD COLUMN discount_reversed INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE returns ADD COLUMN promo_reversed INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE returns ADD COLUMN loyalty_points_reversed INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE returns ADD COLUMN loyalty_value_reversed INTEGER NOT NULL DEFAULT 0;
+      /* How an out-of-window or over-limit return was authorised. */
+      ALTER TABLE returns ADD COLUMN window_override INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE returns ADD COLUMN approved_via TEXT;
+
+      /* Each line remembers why it came back and whether it can be resold. */
+      ALTER TABLE return_items ADD COLUMN reason_code TEXT NOT NULL DEFAULT 'OTHER';
+      ALTER TABLE return_items ADD COLUMN resellable INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE return_items ADD COLUMN net_total INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE return_items ADD COLUMN writeoff_id INTEGER;
+
+      /* Goods that cannot be resold are recorded, valued at cost. */
+      CREATE TABLE IF NOT EXISTS stock_writeoffs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_id INTEGER,
+        product_id INTEGER NOT NULL,
+        batch_id INTEGER,
+        batch_no TEXT,
+        qty INTEGER NOT NULL,
+        cost_price INTEGER NOT NULL DEFAULT 0,
+        value INTEGER NOT NULL DEFAULT 0,
+        reason_code TEXT NOT NULL DEFAULT 'OTHER',
+        reason TEXT,
+        user_id INTEGER,
+        username TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_writeoffs_return ON stock_writeoffs(return_id);
+      CREATE INDEX IF NOT EXISTS idx_writeoffs_product ON stock_writeoffs(product_id);
+
+      /* Credit notes reuse the print trail, distinguished by kind. */
+      ALTER TABLE document_prints ADD COLUMN return_id INTEGER;
+      ALTER TABLE document_prints ADD COLUMN kind TEXT NOT NULL DEFAULT 'SALE';
+
+      /* Reconciled on upgrade: the receipt number is copied onto every
+         existing return so old credit notes can still be looked up. */
+      UPDATE returns
+         SET sale_receipt_no = (SELECT s.receipt_no FROM sales s WHERE s.id = returns.sale_id);
+    `
   }
 ];
 

@@ -24,7 +24,7 @@ export const RECEIPT_LAYOUTS: { value: ReceiptLayout; label: string }[] = [
   { value: 'A4_INVOICE', label: 'A4 wholesale invoice' }
 ];
 
-export type ApprovalPurpose = 'PRICE_OVERRIDE' | 'DISCOUNT' | 'VOID';
+export type ApprovalPurpose = 'PRICE_OVERRIDE' | 'DISCOUNT' | 'VOID' | 'RETURN' | 'RETURN_WINDOW';
 
 export type DocType = 'RECEIPT' | 'INVOICE';
 
@@ -598,18 +598,56 @@ export interface SaleSummary {
 /* Returns / credit notes                                              */
 /* ------------------------------------------------------------------ */
 
+/** Fixed reason codes, with `reason` kept as the human sentence. */
+export type ReturnReasonCode = 'WRONG_ITEM' | 'DAMAGED' | 'EXPIRED' | 'CHANGED_MIND' | 'OTHER';
+
+export const RETURN_REASONS: { value: ReturnReasonCode; label: string }[] = [
+  { value: 'WRONG_ITEM', label: 'Wrong item' },
+  { value: 'DAMAGED', label: 'Damaged' },
+  { value: 'EXPIRED', label: 'Expired' },
+  { value: 'CHANGED_MIND', label: 'Customer changed mind' },
+  { value: 'OTHER', label: 'Other' }
+];
+
+export type ReturnType = 'REFUND' | 'STORE_CREDIT' | 'EXCHANGE';
+
+export const RETURN_TYPES: { value: ReturnType; label: string }[] = [
+  { value: 'REFUND', label: 'Refund' },
+  { value: 'STORE_CREDIT', label: 'Store credit' },
+  { value: 'EXCHANGE', label: 'Exchange' }
+];
+
+export type RefundMethod = 'CASH' | 'TRANSFER' | 'POS' | 'STORE_CREDIT';
+
+/** Whether the goods can go back on the shelf, and what state they are in. */
+export type ItemCondition = 'SEALED' | 'OPENED';
+
 export interface ReturnLineInput {
   saleItemId: number;
   qty: number;
   /** Put the goods back on the shelf (default true). */
   restock?: boolean;
+  reasonCode?: ReturnReasonCode;
+  /** Can the item be resold? Pharmacy forces this off for expired/opened goods. */
+  resellable?: boolean;
+  condition?: ItemCondition;
 }
 
 export interface ReturnInput {
-  saleId: number;
+  saleId?: number;
+  /** Look the sale up by its printed receipt number instead of its id. */
+  receiptNo?: string;
   lines: ReturnLineInput[];
   reason: string;
+  reasonCode?: ReturnReasonCode;
+  returnType?: ReturnType;
+  refundMethod?: RefundMethod;
+  /** What the customer took instead (exchange returns). */
+  exchangeNote?: string;
+  /** Kept for backwards compatibility with the phase 4 client. */
   restock?: boolean;
+  /** Approval token from pos.approve (purpose RETURN or RETURN_WINDOW). */
+  approvalToken?: string;
 }
 
 export interface ReturnLine {
@@ -621,10 +659,33 @@ export interface ReturnLine {
   qty: number;
   unitPrice: Money;
   lineTotal: Money;
+  /** What the customer actually gets back for this line, after discounts. */
+  netTotal: Money;
   batchId: number | null;
+  costPrice: Money;
   restock: boolean;
+  resellable: boolean;
+  reasonCode: ReturnReasonCode;
+  writeoffId: number | null;
   /** Weighed line: qty is grams and the unit price is per kilogram. */
   isWeighed: boolean;
+}
+
+/** A returned item that cannot be resold, recorded at cost. */
+export interface StockWriteoff {
+  id: number;
+  returnId: number | null;
+  productId: number;
+  productName?: string;
+  batchId: number | null;
+  batchNo: string | null;
+  qty: number;
+  costPrice: Money;
+  value: Money;
+  reasonCode: ReturnReasonCode;
+  reason: string | null;
+  username: string | null;
+  createdAt: string;
 }
 
 export interface SaleReturn {
@@ -634,7 +695,18 @@ export interface SaleReturn {
   saleReceiptNo: string;
   customerName: string | null;
   reason: string;
+  reasonCode: ReturnReasonCode;
+  returnType: ReturnType;
+  refundMethod: RefundMethod | null;
+  exchangeNote: string | null;
   total: Money;
+  /** Discount (item + sale level) given back through this credit note. */
+  discountReversed: Money;
+  promoReversed: Money;
+  loyaltyPointsReversed: number;
+  loyaltyValueReversed: Money;
+  windowOverride: boolean;
+  approvedVia: 'PIN' | 'PERMISSION' | null;
   status: ReturnStatus;
   requestedBy: number;
   requestedByName: string;
@@ -647,6 +719,42 @@ export interface SaleReturn {
   storeAddress: string;
   storePhone: string;
   items?: ReturnLine[];
+}
+
+/** A receipt opened at the returns desk, with what is still returnable. */
+export interface ReturnableSale {
+  sale: Sale;
+  /** Days since the sale, and the store's window today. */
+  ageDays: number;
+  windowDays: number;
+  withinWindow: boolean;
+  /** Total payable if every remaining item came back. */
+  returnableValue: number;
+  returnLimit: Money;
+  overLimit: boolean;
+  canApprove: boolean;
+  /** True when the caller must fetch an approval token before submitting. */
+  needsApproval: boolean;
+  needsWindowOverride: boolean;
+  loyaltyPointsReversedSoFar: number;
+  items: {
+    saleItemId: number;
+    name: string;
+    sku: string;
+    qty: number;
+    alreadyReturned: number;
+    returnableQty: number;
+    unitPrice: Money;
+    isWeighed: boolean;
+    /** What comes back per unit right now, after its share of discounts. */
+    refundPerUnit: Money;
+    /** Weighed lines only: what comes back per kilogram. */
+    refundPerKg: Money | null;
+    batchId: number | null;
+    batchNo: string | null;
+    batchExpired: boolean;
+    rxRequired: boolean;
+  }[];
 }
 
 /* ------------------------------------------------------------------ */

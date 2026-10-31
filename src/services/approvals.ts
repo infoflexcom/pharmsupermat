@@ -31,13 +31,17 @@ const grants = new Map<string, StoredGrant>();
 const APPROVER_PERMISSION: Record<ApprovalPurpose, string> = {
   PRICE_OVERRIDE: 'prices.override',
   DISCOUNT: 'settings.manage',
-  VOID: 'sales.void.approve'
+  VOID: 'sales.void.approve',
+  RETURN: 'returns.approve',
+  RETURN_WINDOW: 'settings.manage'
 };
 
 const PURPOSE_LABEL: Record<ApprovalPurpose, string> = {
   PRICE_OVERRIDE: 'price override',
   DISCOUNT: 'discount above the cap',
-  VOID: 'void'
+  VOID: 'void',
+  RETURN: 'return above the limit',
+  RETURN_WINDOW: 'return outside the return window'
 };
 
 let sweepCounter = 0;
@@ -69,7 +73,7 @@ export function approveWithPin(
   requester: { userId: number; username: string }
 ): ApprovalGrant {
   if (!input || typeof input !== 'object') throw validation('Approval details are missing.');
-  if (!['PRICE_OVERRIDE', 'DISCOUNT', 'VOID'].includes(input.purpose)) {
+  if (!['PRICE_OVERRIDE', 'DISCOUNT', 'VOID', 'RETURN', 'RETURN_WINDOW'].includes(input.purpose)) {
     throw validation('Unknown approval type.');
   }
   const username = (input.username ?? '').trim();

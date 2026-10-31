@@ -660,3 +660,87 @@ here is DRM-grade:
 - A promotion applies to a line, and two scans of the same product in one basket rely on the
   till merging them (it does); a hand-built cart with the same product on two lines is priced
   as two lines, each with its own promotion test.
+
+## 36. Phase 7: returns, refunds and write-offs
+
+- **Every return starts at a receipt.** `returns.lookup` opens a sale by its printed
+  `receipt_no` (case-insensitive) or by id and answers with what is still returnable per line,
+  the batch and its expiry, the credit per unit (or per kilogram), the age in days, the window
+  and the limit. The lookup is done in the main process, so the desk cannot invent lines: a
+  return line must name a `sale_item_id` that belongs to the receipt, and the cap is
+  `sold − already returned (completed or pending)`.
+- **A return is worth its share of what the customer actually paid.** For each line the credit
+  is `round(line_basis × qty × sale.total ÷ (item.qty × Σ line_basis))`, where
+  `line_basis = line_total − line_discount`. Because `sale.total` already contains promotions,
+  sale-level discounts, VAT and points spent, the refund pro-rates all of them. `return_items`
+  keeps both numbers: `line_total` is the original line value, `net_total` is the credit, and
+  the printed note shows both. Returning every remaining unit reproduces the sale total exactly;
+  two partial returns can differ by at most one kobo from that total.
+- **Reversals are booked, not inferred.** `returns.discount_reversed`, `promo_reversed`,
+  `loyalty_points_reversed` and `loyalty_value_reversed` record the share
+  (`returned_basis ÷ all_basis`) of each reduction, so reports can show what a return actually
+  cost the shop. Loyalty points are taken back through `adjustLoyaltyPoints` (negative ledger
+  row, reason “Reversed on CN-…”) and are capped at the member's current balance — points
+  already spent elsewhere cannot push a balance below zero. Reversal only applies on
+  supermarket licences.
+- **Reasons and types are enumerated.** Reasons: wrong item, damaged, expired, customer changed
+  mind, other. Types: refund, store credit, exchange. A free-text note is always stored (the
+  reason label when the cashier types nothing); “other” needs a real explanation, an exchange
+  needs the replacement written down, and store credit forces the refund method to
+  `STORE_CREDIT` so no cash leaves the till by accident.
+- **Resellable goods go back to the batch they came from.** A line is restocked only when the
+  cashier ticks “back to stock”, the reason is not *expired*, the pharmacy condition is not
+  *opened*, and the batch has not passed its expiry date. Restocking calls `receiveStock` with
+  the sale line's `batch_id`, type `RETURN` and the return as `ref_id`, so the stock ledger,
+  the batch and the movement trail agree. Everything else becomes a `stock_writeoffs` row at
+  cost (qty × the line's cost price), linked from `return_items.writeoff_id`, audited as
+  `return.writeoff`, and printed on the credit note as “Not resellable — written off”.
+- **The window is an administrator decision; the amount is a supervisor decision.**
+  `return_window_days` (default 7) is checked against `sales.created_at` in whole days. A
+  return outside it needs a `pos.approve` token with purpose `RETURN_WINDOW`, which requires
+  `settings.manage` — i.e. an administrator, with their own password, logged in the audit
+  trail; the return is then marked `window_override = 1` and `approved_via = 'PIN'`.
+  `return_limit` (default ₦20,000) governs the amount: an actor holding `returns.approve`
+  completes it (`approved_via = 'PERMISSION'`), otherwise a `RETURN` token from a supervisor
+  or administrator completes it at the counter, and without either it waits as `PENDING`.
+  A single token can cover only one decision; because the only role that may grant the window
+  (administrator) also holds `returns.approve`, a return that is both late and large still
+  completes with that one token.
+- **A pending return commits nothing.** Stock, loyalty and the credit-note number are only
+  written when the return completes (`approveReturn` inside one transaction); rejecting it
+  leaves stock and points untouched and records the rejection reason. The pending document is
+  printable and stamped “Pending approval”, so the customer can see what they will get.
+- **The credit note uses the sale's store snapshot.** `returns.store_name / store_address /
+  store_phone` are copied from the receipt's snapshot when the return is created, so renaming
+  the shop never rewrites history. A reprint is stamped **DUPLICATE** and audited as
+  `return.reprint` (WARN). Prints are logged in `document_prints` with `kind = 'RETURN'` and
+  `return_id`, which keeps them apart from receipt prints of the same sale (and from the
+  `print_count` on the sale).
+- **Returns never touch the sale.** No completed sale is edited or deleted by a return; the
+  link is `returns.sale_id` / `sale_receipt_no`. `returns.list` stays scoped for cashiers
+  (their own requests or approvals) while `reports.view.all` sees the whole register, and the
+  write-off register and its totals are only available to `reports.view.all`.
+- **The desk is three tabs.** New return (receipt lookup, line table with per-line restock and
+  pharmacy condition, type/reason/refund method, PIN prompt), Credit notes (register, preview,
+  print, approve/reject) and Write-offs (the register with the value written off).
+
+## 37. Known limitations after phase 7
+
+- **An exchange is a return plus a normal sale.** The credit note records the return and the
+  replacement note; the shop rings the replacement through the till separately. There is no
+  automatic swap that moves stock and money in one document yet.
+- **Store credit is a printed credit note, not a customer wallet.** There is no store-credit
+  ledger or redemption at the till; the note is the record the shop honours.
+- **Loyalty clawback is limited by the current balance.** If a customer spent the points they
+  earned before bringing goods back, the ledger can only take back what is still there.
+- **The window is a single global number of days.** No per-category or per-department windows,
+  and it is measured in whole days from the sale's UTC timestamp.
+- **Window overrides cannot be exercised through the public API in a live run** because there is
+  no channel that ages a sale; the 10-day-old receipt scenario is covered by
+  `tests/returns-phase7.test.ts` and by the database verifier.
+- **No attachment or second approval for write-offs.** A write-off is a costed row with a user,
+  a reason and an audit entry; there is no photo, destruction witness or approval step.
+- **Refunds against a credit invoice do not adjust `balance_due`.** Stock and the credit note are
+  right; the customer's outstanding balance is still settled through `pos.credits.pay`.
+- **Partial-return rounding.** Each return rounds its own credit, so two partial returns can be
+  one kobo away from a single full return (the full return itself is exact).
