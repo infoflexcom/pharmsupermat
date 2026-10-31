@@ -1,0 +1,73 @@
+appId: com.infoflex.pos
+productName: Infoflex
+copyright: Copyright © 2026 Infoflex. All rights reserved.
+
+# Everything ships inside an asar archive (the SQLite binary is unpacked) so the
+# main-process licence guards are not a loose folder of readable files.
+asar: true
+compression: maximum
+
+directories:
+  output: release
+  buildResources: resources/build
+
+files:
+  - out/**/*
+  - resources/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/*.ts'
+
+# The SQLite native binary must sit outside the asar archive.
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+
+# better-sqlite3 v13 ships Node-API prebuilds for every platform inside the
+# package (prebuilds/win32-x64.node, linux-x64.node, …), so the same file loads
+# in Node and in Electron. Rebuilding from source is unnecessary — and on a
+# Linux build machine it is impossible for a Windows target.
+npmRebuild: false
+
+win:
+  icon: resources/build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: Infoflex-Setup-${version}.${ext}
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  # Vendor gate: a custom password page in front of every other page.
+  # `installer.nsh` is picked up automatically from buildResources, but it is
+  # named here so the wiring is visible. Both files must exist — the compile
+  # fails loudly if the gate header has not been minted.
+  include: resources/build/installer.nsh
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Infoflex
+  installerIcon: resources/build/icon.ico
+  uninstallerIcon: resources/build/icon.ico
+  installerHeaderIcon: resources/build/icon.ico
+  license: docs/EULA.txt
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  menuCategory: false
+
+linux:
+  icon: resources/build/icon.png
+  category: Office
+  target:
+    - AppImage
+  artifactName: Infoflex-${version}.${ext}
+
+mac:
+  icon: resources/build/icon.png
+  category: public.app-category.business
+  target:
+    - dmg
+  identity: null
