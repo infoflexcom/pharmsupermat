@@ -84,7 +84,11 @@ your records).
   stays on record.
 - **Price override** in the supermarket edition needs a supervisor; in the
   pharmacy edition only the administrator has that right.
-- **Reports** print with the store name at the top.
+- **Reports**: *Reports → Daily summary* shows any trading day (net sales, money
+  taken, discounts, returns, payment split, retail vs wholesale, sales per user);
+  *Monthly summary* adds a day table and a daily chart; *All reports* lists every
+  report your role may read. Each one prints with the store name, address and
+  period at the top and exports to CSV, Excel or (desktop) PDF.
 - **Receive stock**: Products → *Receive* on a row (or Stock & Purchases). You
   can type packs (one carton = the product's pack size), loose units, or
   kilograms for a weighed item; the app converts to base units itself.
@@ -156,10 +160,14 @@ Both run against a temporary database; neither touches a shop's live file.
 Run them after changing `src/db/migrations.ts` or `src/db/schema.ts` — `db:verify`
 fails when the two disagree.
 
-**Day closing** (`operations.day.totals` → `operations.day.close`) stores one row
-per business date with cash/transfer/POS totals, returns, expected cash and the
-variance against the counted drawer. Closing the same date twice is refused, so
-the figures on a printed day report can never silently change.
+**Day closing** (*Reports → End of day close*, channels
+`operations.day.reconcile` → `operations.day.close`) shows the opening float,
+cash sales, cash refunds and the expected drawer, then saves the counted cash and
+the variance in one row per business date. Only `reports.view.all` (supervisor or
+administrator) may reconcile or close; closing the same date twice is refused, so
+the figures on a printed day report can never silently change. On supermarket
+licences the same panel lists every shift and every cashier with their own
+over/short.
 
 **Cashier shifts** (supermarket edition): open a shift with a float, log drawer
 events (no-sale, paid in, paid out), then close with the counted cash. Only the

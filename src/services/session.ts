@@ -29,6 +29,8 @@ export interface ApiContext {
   now(): Date;
   /** Electron-only printer hook; absent in the browser dev harness. */
   print?: (payload: { html: string; title: string }) => Promise<{ printed: boolean; message: string }>;
+  /** Electron-only PDF renderer (Chromium printToPDF). */
+  pdf?: (payload: { html: string; title: string }) => Promise<Buffer>;
 }
 
 /** Fallback when settings cannot be read (e.g. a brand-new database). */
@@ -50,6 +52,7 @@ export function createContext(options: {
   version: string;
   now?: () => Date;
   print?: (payload: { html: string; title: string }) => Promise<{ printed: boolean; message: string }>;
+  pdf?: (payload: { html: string; title: string }) => Promise<Buffer>;
 }): ApiContext {
   // Licences written before migration v4 have no HMAC yet: sign them once, in
   // main, before anything reads the status. A tampered row is never blessed.
@@ -65,7 +68,8 @@ export function createContext(options: {
     version: options.version,
     sessions: new Map(),
     now: options.now ?? (() => new Date()),
-    ...(options.print ? { print: options.print } : {})
+    ...(options.print ? { print: options.print } : {}),
+    ...(options.pdf ? { pdf: options.pdf } : {})
   };
 }
 

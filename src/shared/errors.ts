@@ -13,6 +13,7 @@ export type ErrorCode =
   | 'APPROVAL_REQUIRED'
   | 'SHIFT_REQUIRED'
   | 'PRINT_BLOCKED'
+  | 'UNAVAILABLE'
   | 'INTERNAL';
 
 export class AppError extends Error {

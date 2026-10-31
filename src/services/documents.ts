@@ -1,4 +1,15 @@
-import { RETURN_REASONS, type ReceiptLayout, type Sale, type SaleReturn, type StoreProfile } from '../shared/types';
+import {
+  RETURN_REASONS,
+  type MonthDayTotal,
+  type PaymentTotal,
+  type ReceiptLayout,
+  type ReportChart,
+  type Sale,
+  type SaleReturn,
+  type StoreProfile,
+  type SummaryTotals,
+  type UserSalesTotal
+} from '../shared/types';
 import { formatMoney } from '../shared/money';
 
 /**
@@ -512,10 +523,41 @@ export interface ReportTable {
   rows: Record<string, string | number | null>[];
   totals?: Record<string, number>;
   meta?: Record<string, string | number>;
+  chart?: ReportChart;
   storeName: string;
   storeAddress: string;
   storePhone: string;
+  storeEmail?: string;
+  storeLicenceNo?: string;
+  storeVatNo?: string;
+  storeLogo?: string;
   productName?: string;
+}
+
+/**
+ * A bar chart drawn with plain divs so it prints as-is and needs no script.
+ * Heights are relative to the largest value, so a quiet month still reads.
+ */
+function chartHtml(chart: ReportChart): string {
+  const max = Math.max(1, ...chart.values.map((v) => Math.abs(v)));
+  const bars = chart.labels
+    .map((label, index) => {
+      const value = chart.values[index] ?? 0;
+      const height = Math.max(1, Math.round((Math.abs(value) / max) * 100));
+      const title = chart.money ? formatMoney(value) : String(value);
+      return `<div style="flex:1;min-width:6px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:120px" title="${escapeHtml(label)}: ${escapeHtml(title)}">
+        <div style="font-size:7px;color:#4b5563;margin-bottom:2px">${value > 0 ? escapeHtml(String(Math.round(value / 100))) : ''}</div>
+        <div style="width:68%;background:#1F3F73;height:${height}%;border-radius:2px 2px 0 0"></div>
+        <div style="font-size:7px;color:#6b7280;margin-top:2px">${escapeHtml(label)}</div>
+      </div>`;
+    })
+    .join('');
+  return `<div class="chart" style="margin:10px 0 14px">
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin-bottom:4px">${escapeHtml(
+      chart.label ?? 'Chart'
+    )}</div>
+    <div style="display:flex;align-items:flex-end;gap:2px;border-bottom:1px solid #d1d5db;padding-bottom:2px">${bars}</div>
+  </div>`;
 }
 
 export function buildReportDocument(report: ReportTable): string {
@@ -550,16 +592,148 @@ export function buildReportDocument(report: ReportTable): string {
         .join(' &middot; ')}</div>`
     : '';
   const body = `
-    ${storeHeader({ name: report.storeName, address: report.storeAddress, phone: report.storePhone })}
+    ${storeHeader({
+      name: report.storeName,
+      address: report.storeAddress,
+      phone: report.storePhone,
+      email: report.storeEmail,
+      licenceNo: report.storeLicenceNo,
+      vatNo: report.storeVatNo,
+      logo: report.storeLogo
+    })}
     <div class="doc-title">
       <h2>${escapeHtml(report.title)}</h2>
       <div class="meta">${escapeHtml(new Date().toLocaleString('en-NG'))}</div>
     </div>
     <div class="meta">${escapeHtml(report.subtitle)}</div>
     ${meta}
+    ${report.chart ? chartHtml(report.chart) : ''}
     <table><thead><tr>${head}</tr></thead><tbody>${
       bodyRows || `<tr><td colspan="${report.columns.length}">No records for this period.</td></tr>`
     }</tbody>${totalsRow ? `<tfoot>${totalsRow}</tfoot>` : ''}</table>
     <div class="footer">${poweredByLine(report.productName ?? 'Infoflex')}</div>`;
   return wrapper(report.title, body);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Daily / monthly summaries                                          */
+/* ------------------------------------------------------------------ */
+
+export interface SummaryDocumentInput {
+  title: string;
+  subtitle: string;
+  store: StoreProfile;
+  productName: string;
+  totals: SummaryTotals;
+  payments: PaymentTotal[];
+  users: UserSalesTotal[];
+  days?: MonthDayTotal[];
+  chart?: ReportChart;
+  includeProfit: boolean;
+  scopeNote?: string;
+}
+
+const moneyCell = (value: number): string => formatMoney(value);
+const moneyOrDash = (value: number | null): string => (value === null ? '—' : formatMoney(value));
+
+/**
+ * The daily/monthly summary page: the shop's name at the top, the period under
+ * it, the money in tiles, then the payment split, the cashier table and (for a
+ * month) the day-by-day table with a chart.
+ */
+export function buildSummaryDocument(input: SummaryDocumentInput): string {
+  const t = input.totals;
+  const tile = (label: string, value: string, hint?: string) =>
+    `<div style="border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;background:#fafaf8">
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:.08em;color:#6b7280">${escapeHtml(label)}</div>
+      <div style="font-size:14px;font-weight:700;color:#111827">${escapeHtml(value)}</div>
+      ${hint ? `<div style="font-size:8px;color:#6b7280">${escapeHtml(hint)}</div>` : ''}
+    </div>`;
+
+  const tiles = [
+    tile('Total sales', moneyCell(t.grossSales), `${t.salesCount} transaction${t.salesCount === 1 ? '' : 's'}`),
+    tile('Retail', moneyCell(t.retailSales), `${t.retailCount} sale${t.retailCount === 1 ? '' : 's'}`),
+    tile('Wholesale', moneyCell(t.wholesaleSales), `${t.wholesaleCount} invoice${t.wholesaleCount === 1 ? '' : 's'}`),
+    tile('Discounts', moneyCell(t.discounts)),
+    tile('VAT', moneyCell(t.tax)),
+    tile('Returns', moneyCell(t.returnsTotal), `${t.returnsCount} credit note${t.returnsCount === 1 ? '' : 's'}`),
+    tile('Net sales (ex VAT)', moneyCell(t.netSales)),
+    tile('Takings (incl VAT)', moneyCell(t.netSalesInclVat)),
+    tile('Cost of goods sold', moneyCell(t.cogs)),
+    ...(input.includeProfit
+      ? [tile('Gross profit', moneyOrDash(t.grossProfit), t.netSales > 0 ? `${Math.round(((t.grossProfit ?? 0) / t.netSales) * 1000) / 10}% margin` : undefined)]
+      : [])
+  ].join('');
+
+  const paymentRows = input.payments
+    .map(
+      (p) =>
+        `<tr><td>${escapeHtml(p.label)}</td><td class="num">${p.count}</td><td class="num">${moneyCell(p.amount)}</td></tr>`
+    )
+    .join('');
+  const paymentTotals = input.payments.reduce((sum, p) => sum + p.amount, 0);
+
+  const userRows = input.users
+    .map(
+      (u) =>
+        `<tr><td>${escapeHtml(u.fullName)} (${escapeHtml(u.username)})</td><td class="num">${u.salesCount}</td><td class="num">${moneyCell(u.gross)}</td><td class="num">${moneyCell(u.net)}</td><td class="num">${moneyCell(u.returns)}</td></tr>`
+    )
+    .join('');
+
+  const dayRows = (input.days ?? [])
+    .map(
+      (d) =>
+        `<tr><td>${escapeHtml(d.date)}</td><td class="num">${d.salesCount}</td><td class="num">${moneyCell(d.net)}</td><td class="num">${moneyCell(d.takings)}</td><td class="num">${moneyCell(d.returns)}</td><td class="num">${moneyCell(d.cogs)}</td>${
+          input.includeProfit ? `<td class="num">${moneyOrDash(d.profit)}</td>` : ''
+        }</tr>`
+    )
+    .join('');
+
+  const body = `
+    ${storeHeader({
+      name: input.store.storeName,
+      address: input.store.storeAddress,
+      phone: input.store.storePhone,
+      email: input.store.storeEmail,
+      licenceNo: input.store.storeLicenceNo,
+      vatNo: input.store.storeVatNo,
+      logo: input.store.storeLogo
+    })}
+    <div class="doc-title">
+      <h2>${escapeHtml(input.title)}</h2>
+      <div class="meta">${escapeHtml(new Date().toLocaleString('en-NG'))}</div>
+    </div>
+    <div class="meta"><strong>${escapeHtml(input.subtitle)}</strong>${
+      input.scopeNote ? ` &middot; ${escapeHtml(input.scopeNote)}` : ''
+    }</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:12px 0">${tiles}</div>
+    ${input.chart ? chartHtml(input.chart) : ''}
+    <h3 style="font-size:11px;margin:14px 0 4px">Payment methods</h3>
+    <table><thead><tr><th>Method</th><th class="num">Count</th><th class="num">Amount</th></tr></thead>
+      <tbody>${paymentRows || '<tr><td colspan="3">No payments in this period.</td></tr>'}</tbody>
+      <tfoot><tr style="font-weight:700"><td>Total</td><td class="num"></td><td class="num">${moneyCell(paymentTotals)}</td></tr></tfoot>
+    </table>
+    <h3 style="font-size:11px;margin:14px 0 4px">Sales per user</h3>
+    <table><thead><tr><th>User</th><th class="num">Sales</th><th class="num">Gross</th><th class="num">Takings</th><th class="num">Returns</th></tr></thead>
+      <tbody>${userRows || '<tr><td colspan="5">No sales in this period.</td></tr>'}</tbody>
+    </table>
+    ${
+      input.days
+        ? `<h3 style="font-size:11px;margin:14px 0 4px">Day by day</h3>
+    <table><thead><tr><th>Date</th><th class="num">Sales</th><th class="num">Net sales</th><th class="num">Takings</th><th class="num">Returns</th><th class="num">Cost</th>${
+      input.includeProfit ? '<th class="num">Profit</th>' : ''
+    }</tr></thead>
+      <tbody>${dayRows}</tbody>
+      <tfoot><tr style="font-weight:700"><td>Total</td><td class="num">${t.salesCount}</td><td class="num">${moneyCell(t.netSales)}</td><td class="num">${moneyCell(
+        t.netSalesInclVat
+      )}</td><td class="num">${moneyCell(t.returnsTotal)}</td><td class="num">${moneyCell(t.cogs)}</td>${
+        input.includeProfit ? `<td class="num">${moneyOrDash(t.grossProfit)}</td>` : ''
+      }</tr></tfoot>
+    </table>`
+        : ''
+    }
+    <div class="footer">${poweredByLine(input.productName)}<br />Every figure is drawn from the sales, payments and returns recorded in this store.</div>`;
+
+  return wrapper(input.title, body);
 }

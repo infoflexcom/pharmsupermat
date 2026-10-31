@@ -48,3 +48,24 @@ export async function printHtml(payload: {
       });
   });
 }
+
+/**
+ * Renders the same HTML to a PDF buffer (A4) with Chromium's own engine, so a
+ * report exported as PDF looks exactly like the printed page — store header,
+ * period, tables and chart. Nothing leaves the machine.
+ */
+export async function pdfHtml(payload: { html: string; title: string }): Promise<Buffer> {
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 1600,
+    show: false,
+    title: payload.title,
+    webPreferences: { sandbox: true, contextIsolation: true, javascript: false }
+  });
+  try {
+    await win.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(payload.html)}`);
+    return await win.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
+  } finally {
+    if (!win.isDestroyed()) win.destroy();
+  }
+}

@@ -26,6 +26,23 @@ export function rangeBounds(from?: string, to?: string): { start: string; end: s
   return { start: `${f}T00:00:00.000Z`, end: `${t}T23:59:59.999Z` };
 }
 
+/** ISO boundaries for a calendar month (`YYYY-MM`), inclusive. */
+export function monthBounds(month: string): { start: string; end: string } {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error(`Invalid month ${month}`);
+  const year = Number(month.slice(0, 4));
+  const index = Number(month.slice(5, 7));
+  const lastDay = new Date(Date.UTC(year, index, 0)).getUTCDate();
+  return { start: `${month}-01T00:00:00.000Z`, end: `${month}-${String(lastDay).padStart(2, '0')}T23:59:59.999Z` };
+}
+
+/** Every calendar day in a month, as `YYYY-MM-DD`. */
+export function monthDays(month: string): string[] {
+  const { start, end } = monthBounds(month);
+  const lastDay = Number(end.slice(8, 10));
+  void start;
+  return Array.from({ length: lastDay }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`);
+}
+
 export function likeParam(value: string): string {
   return `%${value.replace(/[%_]/g, (m) => `\\${m}`)}%`;
 }

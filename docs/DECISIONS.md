@@ -744,3 +744,124 @@ here is DRM-grade:
   right; the customer's outstanding balance is still settled through `pos.credits.pay`.
 - **Partial-return rounding.** Each return rounds its own credit, so two partial returns can be
   one kobo away from a single full return (the full return itself is exact).
+
+## 38. Phase 8: daily and monthly accounting
+
+**One definition of "a day's sales", used by the summary, the month, the exports and the
+dashboard tile's neighbours.** All of it lives in `src/services/accounting.ts` and is
+hand-checked in `tests/reports-phase8.test.ts` against a ledger written by the tester.
+
+| Figure | Definition |
+| --- | --- |
+| Gross sales | Σ `sales.subtotal` for `status = 'COMPLETED'` on the business date — before manual and promotional discounts |
+| Discounts | Σ `sales.discount` (line discounts already include the promotion) |
+| Tax (VAT) | Σ `sales.tax` |
+| Returns | Σ `returns.total` for `status = 'COMPLETED'`, dated by `approved_at` (not `requested_at`) |
+| Net sales | `saleTotals − tax − (returns − returnsTax)`, where `returnsTax = round(return.total × sale.tax ÷ sale.total)` |
+| Money taken | `saleTotals − returns` (VAT included) — what the drawer and the bank actually saw |
+| COGS | Σ line `cost_price × qty` (weighed lines: `cost × qty ÷ 1000`) minus the cost of returned lines that went back to stock |
+| Gross profit | `net sales − COGS`; `null` unless the caller may see profit (ADMIN) |
+| Retail / wholesale | `sales.tier` (`RETAIL` / `WHOLESALE`), counted and summed separately |
+| Payment split | `payments` of COMPLETED sales, grouped by method, biggest first |
+
+- **Returns are dated when they are approved.** A return requested on Monday and approved on
+  Tuesday belongs to Tuesday, because that is the day stock and money moved. A pending return
+  is invisible to every report.
+- **A cashier's summary is their own work.** Without `reports.view.all`, `reports.daily` /
+  `reports.monthly` are forced to the caller's own sales (`sales.user_id`) and their own
+  returns (`returns.requested_by`), and are locked to today. Cost and profit are never
+  returned to them (`includeProfit` is `session.role === 'ADMIN'`), so the figure is absent
+  from the JSON, the table and the printed page rather than merely hidden in the UI.
+- **Voided sales are not sales.** Their payment rows stay for the audit trail, but every
+  accounting query filters `sales.status = 'COMPLETED'`. The shift drawer query had to be
+  taught this too: a voided cash sale previously inflated the expected cash of the shift by
+  the amount the customer got back.
+- **The month is a day table, not one big query.** `monthlySummary` builds the same daily
+  totals for each date of the month (UTC boundaries), sums them, and returns `days`,
+  `payments` and the chart (`labels` = ISO dates, `values` = net sales per day). Days with no
+  trade appear with zeros so a month always has 28–31 rows.
+- **The dashboard tile is narrower than the summary.** `dashboard.get` counts only
+  `doc_type = 'RECEIPT'` (retail receipts) while the accounting summary counts every
+  completed sale, including wholesale invoices. This is deliberate: the home screen is a
+  quick retail pulse, the summary is the books. Phase 8 documents the difference instead of
+  silently changing the home screen other phases were verified against.
+
+### End-of-day close
+
+- **The drawer is `opening float + cash sales − cash refunds`.** Transfers, card/POS,
+  credit and store credit never sat in the till, so they are shown on the page but not
+  expected in the count. Only returns with `refund_method` CASH (or none) reduce the
+  expectation.
+- **The operator types the float and the count.** `operations.day.reconcile` accepts an
+  `openingFloat`; when it is omitted the float saved with the closed day is reused, so
+  reopening a closed day shows exactly the numbers it was closed with. The reports page has
+  a float field beside the counted cash.
+- **Closing is final.** `operations.day.close` writes one `day_closings` row per business
+  date (unique), stores expected/counted/variance plus who closed it and an optional note,
+  audits `day.close` with `expectedCash` and `cashRefunds` (WARN unless the drawer balanced)
+  and refuses a second close with `CONFLICT`. The audit trail is the correction path.
+- **Supermarket licences also see shifts and cashiers.** Reconcile lists every shift opened
+  on the day with its own float, cash in, cash refunds, expected, counted and over/short, then
+  every cashier's totals for the day. Pharmacy licences get the day-level panel only.
+- **Only `reports.view.all` may reconcile or close.** The permission moved from
+  `settings.manage` to `reports.view.all` so a supervisor can close the till without being
+  able to change shop settings.
+
+## 39. Reports: one catalogue, three exports, one printed page
+
+- **The catalogue is data.** `REPORT_CATALOGUE` in `src/services/reports.ts` lists every
+  report with its kind, label, description, owning edition (`SHARED` / `PHARMACY` /
+  `SUPERMARKET`), the extra permission it needs and whether it exposes cost or profit.
+  `reports.catalogue` filters it in the MAIN process by the active feature flags and the
+  session's permissions, so a pharmacy licence never lists the loyalty report and a cashier
+  never lists debtors. `reports.build` applies the same checks again on the direct channel.
+- **Who may read what.** `DAILY_SUMMARY`, `MONTHLY_SUMMARY` and `SALES_SUMMARY` are open to
+  every role (scoped as above); every other report requires `reports.view.all`; `AUDIT`
+  requires `audit.view`. The cashier is refused with `FORBIDDEN` even if a renderer tried to
+  call the channel directly.
+- **Cost and profit are dropped, not hidden.** Non-admins get tables without the cost column,
+  totals without `cost`/`profit`, and a stock valuation at retail only. The supervisor test
+  asserts the column and the total are absent from the payload.
+- **Every report carries its printed page.** `reports.build` returns the rows, columns,
+  totals, meta, optional chart *and* the fully rendered HTML document, which always starts
+  with the store name, address and phone from Settings and prints the report period as the
+  subtitle. A pharmacy install can never print the "Powered by" line in place of the shop.
+- **Print** goes through `print.document` (Chromium's print dialog, A4 or 80mm as chosen by
+  the operator). **PDF** uses `reports.pdf`, which renders the same HTML to a real PDF in an
+  offscreen `BrowserWindow` (`printToPDF`, A4, backgrounds on). The browser harness has no
+  print engine, so the channel answers `UNAVAILABLE` with a plain-English message and the
+  renderer offers Print → "Save as PDF" instead.
+- **CSV** (`reports.export`) is UTF-8 with a BOM so Excel opens the naira symbols and commas
+  correctly: store name / address / phone, `"<title> — <subtitle>"`, a generation stamp, a
+  blank line, the meta summary as `label,value` pairs, the header row, the data, then a
+  `Total` row. Money is written as plain naira decimals (`(kobo / 100).toFixed(2)`) so a
+  spreadsheet can sum the column; counts stay whole numbers.
+- **Excel** (`reports.excel`) is a real `.xlsx` workbook from the `exceljs` dependency already
+  used by the product import/export: the same header block, a navy header row, money cells as
+  numbers with a `#,##0.00` format, and a bold total row. Files are named
+  `<kind lowercased>-<from date>.csv|.xlsx|.pdf` (for example `daily_summary-2026-03-05.csv`),
+  written to the data folder's `exports` directory on the desktop and downloaded in a browser.
+
+## 40. Known limitations after phase 8
+
+- **Business dates are UTC dates.** `rangeBounds` cuts the day at UTC midnight, matching the
+  timestamps stored elsewhere; a shop in Lagos that trades past 01:00 local time will see
+  those sales on the next UTC day.
+- **The month table costs 31 small queries.** Each day is computed with the same three
+  aggregate queries as a single day; it is instant on SQLite for a shop-sized database but it
+  is not one grouped query.
+- **One drawer, one float.** The day-level expectation takes a single typed opening float.
+  Per-shift floats are reconciled separately (supermarket), and there is no denomination
+  counting sheet or coin-level breakdown.
+- **A day can be closed at any time.** `canClose` is simply "not closed yet", so an operator
+  can close the current day before trading ends. The audit trail and the unique
+  `business_date` row are the guard rails; there is no scheduled midnight close.
+- **A closed day cannot be reopened or edited.** Corrections are made through refunds, voids
+  or adjustments, which land in the audit trail with their own timestamps.
+- **PDF export needs the desktop app.** In the browser harness the channel returns
+  `UNAVAILABLE`; the CSV and Excel paths work everywhere.
+- **No scheduled, emailed or consolidated reports.** Everything is generated on demand for
+  the one store in the database; multi-branch roll-ups are out of scope until a branch model
+  exists.
+- **The daily sales chart is a plain HTML bar chart**, not an image: it prints and scales but
+  cannot be exported on its own.

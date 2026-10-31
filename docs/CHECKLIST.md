@@ -486,3 +486,98 @@ Verified on the same headless Linux sandbox.
 - The aged-receipt window override in a live run: there is no channel that ages a sale, so it is proven in the test suite (and the verifier) rather than through the harness.
 - Loyalty/promotion reversal live: the supermarket promotion and loyalty screens reach `mart.*` channels that arrive in the supermarket phase, so this phase proves the reversal through service-level tests.
 - A physical printer: the credit note prints through the same Chromium preview/dialog as receipts; no thermal hardware in the sandbox.
+
+---
+
+# Phase 8 verification — daily and monthly accounting, reports and exports
+
+## Requirement checklist
+
+### Daily summary (any date)
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Total sales, transaction count | ✅ | `reports.daily` → `grossSales`, `salesCount`; test “builds a daily summary that matches the hand calculation” asserts ₦2,500.00 / 1 sale on the retail day and ₦4,500.00 on the credit day |
+| Retail vs wholesale | ✅ | `retailCount/retailSales` and `wholesaleCount/wholesaleSales` from `sales.tier`; the ledger has one retail and one wholesale day |
+| Payment-method breakdown | ✅ | `payments[]` grouped by method, biggest first — the test expects `CREDIT ₦2,500.00` then `TRANSFER ₦2,000.00`; the live pharmacy run showed `Bank transfer ₦9,900.00, Cash ₦7,320.00` |
+| Discounts | ✅ | `discounts` = Σ `sales.discount` (₦100.00 in the ledger); shown as a tile and printed |
+| Returns / refunds | ✅ | `returnsTotal` + `returnsCount` dated by `approved_at`; ₦960.00 in the ledger, VAT share reversed in the VAT test |
+| Net sales | ✅ | `netSales = saleTotals − tax − (returns − returnsTax)` — ₦1,440.00 on the retail day, hand-checked |
+| COGS | ✅ | Line cost (weighed: `cost × qty ÷ 1000`) minus resellable returns — ₦900.00 retail day, ₦3,000.00 credit day |
+| Gross profit — **Admin only** | ✅ | `null` unless `session.role === 'ADMIN'`; the cashier test asserts `grossProfit === null` and that the printed page has no “gross profit” |
+| Sales per user | ✅ | `users[]` with count/gross/net/returns; the cashier sees one row (their own), the admin sees both |
+| Non-Admins see only their own figures | ✅ | `buildReportForSession` scopes to `session.userId` and locks the period to today; test “shows a cashier only their own figures and never profit” (₦800.00 of ₦2,400.00) |
+
+### Monthly summary (any month)
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Same figures as a day | ✅ | `MonthlySummary extends SummaryTotals`; the month test asserts gross ₦7,000.00, returns ₦960.00, net ₦5,940.00, COGS ₦3,900.00, profit ₦2,040.00 |
+| Day-by-day table | ✅ | `days[]` always has 28–31 rows; day 1 (₦1,440.00) and day 2 (₦4,500.00) match the daily summaries, and a quiet day is zeros |
+| Daily sales chart | ✅ | `chart.labels` / `chart.values` per day plus an HTML bar chart on the page; totals reconcile with `netSales` |
+| Any month / year | ✅ | Month picker on the reports page (`<input type="month">`) and `reports.monthly({ month })`; live run on 2026-10 returned 31 days |
+
+### End-of-day close
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Cashier enters counted cash | ✅ | Counted-cash field beside an opening-float field; `operations.day.close` takes kobo integers and validates them |
+| Expected vs actual and the difference | ✅ | Expected = float + cash sales − cash refunds; the test closes with ₦2,590.00 against ₦2,600.00 expected and stores `variance = −1,000` kobo |
+| Saves it | ✅ | One `day_closings` row per business date (unique), `closed_at`, `closed_by_name`, note, audited `day.close`; a second close returns `CONFLICT` |
+| Supermarket: per shift with over/short | ✅ | `dayReconciliation` lists every shift with float, cash in, refunds, expected, counted, variance; live supermarket run: one shift, expected ₦14,600.00, counted ₦13,595.00, short ₦10.05 |
+| Supermarket: per cashier with over/short | ✅ | `cashiers[]` built from the day's sales per user; live run showed Chidi Cashier ₦14,600.00 expected |
+| A voided sale does not inflate the drawer | ✅ | Shift cash joins `sales.status = 'COMPLETED'`; the day-close test voids a cash sale inside the shift and the expected cash stays at ₦800.00 |
+| Only supervisors/admins may close | ✅ | Permission `reports.view.all`; the test asserts a cashier gets `FORBIDDEN` |
+
+### Other reports
+
+| Report | Edition | Status | Evidence |
+| --- | --- | --- | --- |
+| Top sellers | shared | ✅ | Units, revenue, profit, ranked; test: Rice 5kg 7 units ₦6,500.00, profit ₦2,300.00 |
+| Slow movers | shared | ✅ | Products with no or few sales in the period plus the stock value tied up (₦6,000.00 for the sleeping beans) |
+| Stock valuation | shared | ✅ | Retail for everyone, cost only for the administrator (supervisor test asserts the column and the total are absent) |
+| Low stock | shared | ✅ | At or below the reorder level, with the shortfall |
+| Debtors / credit | shared | ✅ | `reports.view.all` only; test: Sunrise Stores, one invoice, ₦2,500.00 owing, ₦50,000.00 limit, cashier refused |
+| Supplier purchases | shared | ✅ | One row per supplier with invoices, total and outstanding balance (₦5,500.00 owed when nothing was paid) |
+| User performance | shared | ✅ | Per-user sales, average basket, cash taken, returns, voids — admin row: 2 sales, ₦6,900.00, ₦960.00 returned |
+| Audit log | shared | ✅ | `audit.view` only; cashier refused with `FORBIDDEN` |
+| Expiry and write-offs (pharmacy) | pharmacy | ✅ | Expiry windows and the costed write-off register; a pharmacy licence lists them and a supermarket licence refuses with `EDITION_RESTRICTED` |
+| Sales by department (supermarket) | supermarket | ✅ | Department revenue after the promotion discount, cost and margin; test: Groceries 4 units, ₦3,600.00 |
+| Promotion performance (supermarket) | supermarket | ✅ | Lines, units, revenue and the discount given per promotion (₦400.00 on “Beans 10% off”) |
+| Loyalty (supermarket) | supermarket | ✅ | Points earned, redeemed and the balance per member (36 points on ₦3,600.00) |
+| Stocktake variance (supermarket) | supermarket | ✅ | Counted vs system quantity with the value of the difference |
+| Voids and overrides (supermarket) | supermarket | ✅ | Voided sales and every `pos.approve` grant with the approver; live run returned 2 rows |
+
+### Printing and export
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Store name, address and period at the top | ✅ | Every report's HTML comes from `documents.ts` with the Settings store identity and the period as the subtitle; the test walks all 18 kinds and asks for the store name, address, title and period |
+| Printable | ✅ | `reports.build` → HTML → `print.document` (Chromium dialog), with a preview modal on the page |
+| Export to PDF | ✅ | `reports.pdf` renders the same HTML with `printToPDF` in an offscreen `BrowserWindow` (desktop only); the harness answers `UNAVAILABLE` with a readable message (asserted in the smoke run) |
+| Export to Excel / CSV | ✅ | `reports.export` (CSV with BOM, store block, meta summary, `Total` row) and `reports.excel` (real `.xlsx` via `exceljs`, naira number formats, bold total row); both asserted in tests and the smoke run |
+| Downloaded or saved sensibly | ✅ | `documents.saveExport` writes into `data/exports` on the desktop; the browser downloads. Filenames `daily_summary-2026-03-05.csv` / `sales_summary-2026-03-05.xlsx` |
+
+### DONE WHEN
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| Totals match hand calculations on seeded sample data | ✅ | `tests/reports-phase8.test.ts` writes its own ledger (₦2,500.00 retail with a ₦100.00 discount and a resellable rice return, ₦4,500.00 wholesale on credit) and asserts every total from the arithmetic worked out by hand in the test, including the VAT split |
+| Printed and exported reports show the store name | ✅ | 18-kind print test, CSV test and Excel test all look for “Sunmart Test Store”; the live runs looked for “Grace Pharmacy” |
+
+## Verification run
+
+- `npm run typecheck` — clean (node + web, strict, `noUnusedLocals`).
+- `VENDOR_MASTER_PASSWORD=... npm test` — 17 files, **154 tests passed** (12 new phase-8 API tests; the renderer suite gained the mocked report channels).
+- `npm run db:verify` — **190 checks, 0 failed** (38 tables, schema v7 — no schema change in this phase).
+- `VENDOR_MASTER_PASSWORD=... npm run verify:secrets` — PASS (149 files scanned).
+- `BASE_URL=... npm run smoke` (fresh data dir) — **48/48 passed**, including six new checks: daily summary, monthly table + chart, day reconciliation arithmetic, CSV with the store name and a total row, a real `.xlsx` workbook, and the `UNAVAILABLE` message for PDF in the browser harness.
+- Live walk-throughs on the browser harness — **33 checks**: 14 on a pharmacy licence (daily summary, payment split, reconcile, CSV, Excel, PDF message, day close with a ₦0.50 shortfall, cashier scoping, `FORBIDDEN` on debtors, catalogue of 15 reports) and 19 on a supermarket licence (shift open/close, promotion + loyalty sale, cashier void request approved by the admin, daily totals and profit, shift and per-cashier reconciliation, day expected cash, department/promotion/loyalty/void reports, monthly summary, day close variance, Excel export).
+- `npm run build` — main 295.14 kB, preload 0.64 kB, renderer 1,095.26 kB + 33.55 kB CSS.
+
+## What was not verified here
+
+- The Electron PDF path: `printToPDF` needs a real `BrowserWindow`, so the sandbox only proves the `UNAVAILABLE` fallback and the HTML that would be rendered. The desktop build wires `ctx.pdf` in `src/main/index.ts`.
+- A physical printer and paper sizes: reports print through the same Chromium dialog as receipts.
+- A month of real trading: the month table is proven with a seeded month (two trading days inside one calendar month) rather than 31 days of shop data.
+- Concurrent closing from two machines: the SQLite file is single-user, so the unique `business_date` row is the only guard needed.

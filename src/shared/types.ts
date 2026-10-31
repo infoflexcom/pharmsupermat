@@ -796,18 +796,55 @@ export interface AuditEntry {
 /* ------------------------------------------------------------------ */
 
 export type ReportKind =
+  | 'DAILY_SUMMARY'
+  | 'MONTHLY_SUMMARY'
   | 'SALES_SUMMARY'
   | 'PRODUCT_SALES'
+  | 'TOP_SELLERS'
+  | 'SLOW_MOVERS'
   | 'STOCK_VALUATION'
   | 'LOW_STOCK'
-  | 'EXPIRY_WATCH'
+  | 'DEBTORS'
+  | 'SUPPLIER_PURCHASES'
+  | 'USER_PERFORMANCE'
   | 'RETURNS'
+  | 'EXPIRY_WATCH'
+  | 'WRITE_OFFS'
+  | 'DEPARTMENT_SALES'
+  | 'PROMOTION_PERFORMANCE'
+  | 'LOYALTY'
+  | 'STOCKTAKE_VARIANCE'
+  | 'VOID_OVERRIDES'
   | 'AUDIT';
+
+/** Which licence modules a report belongs to. Shared reports run everywhere. */
+export type ReportOwner = 'SHARED' | 'PHARMACY' | 'SUPERMARKET';
+
+export interface ReportCatalogueEntry {
+  kind: ReportKind;
+  label: string;
+  description: string;
+  owner: ReportOwner;
+  /** Extra permission the report needs on top of `reports.view.own`. */
+  permission?: 'audit.view' | 'reports.view.all';
+  /** The report exposes cost/profit figures that only an administrator may see. */
+  adminOnly?: boolean;
+}
+
+/** A simple bar chart the renderer and the printed page share. */
+export interface ReportChart {
+  labels: string[];
+  values: number[];
+  label?: string;
+  money?: boolean;
+}
 
 export interface ReportRequest {
   kind: ReportKind;
   from?: string; // YYYY-MM-DD
   to?: string; // YYYY-MM-DD
+  /** Reports that take a calendar month use this (`YYYY-MM`). */
+  month?: string;
   userId?: number;
   limit?: number;
 }
@@ -827,7 +864,135 @@ export interface ReportResult {
   rows: Record<string, string | number | null>[];
   totals: Record<string, number>;
   meta: Record<string, string | number>;
+  chart?: ReportChart;
+  owner: ReportOwner;
   html: string;
+}
+
+/* ---- daily / monthly accounting ---- */
+
+export interface PaymentTotal {
+  method: PaymentMethod | string;
+  label: string;
+  count: number;
+  amount: Money;
+}
+
+export interface UserSalesTotal {
+  userId: number;
+  username: string;
+  fullName: string;
+  salesCount: number;
+  gross: Money;
+  net: Money;
+  returns: Money;
+}
+
+export interface SummaryTotals {
+  salesCount: number;
+  retailCount: number;
+  retailSales: Money;
+  wholesaleCount: number;
+  wholesaleSales: Money;
+  /** Sum of line totals before any discount (VAT excluded). */
+  grossSales: Money;
+  discounts: Money;
+  /** VAT charged on the sales in the period. */
+  tax: Money;
+  returnsCount: number;
+  returnsTotal: Money;
+  /** Revenue after discounts and returns, VAT excluded. */
+  netSales: Money;
+  /** Money that actually came in net of returns, VAT included. */
+  netSalesInclVat: Money;
+  cogs: Money;
+  /** Net sales − cost of goods sold. Null unless the caller may see profit. */
+  grossProfit: Money | null;
+}
+
+export interface DailySummary extends SummaryTotals {
+  date: string;
+  payments: PaymentTotal[];
+  users: UserSalesTotal[];
+  /** Set when the summary is limited to one signed-in user. */
+  scopeUserId: number | null;
+  html: string;
+}
+
+export interface MonthDayTotal {
+  date: string;
+  salesCount: number;
+  /** Net sales for the day, VAT excluded. */
+  net: Money;
+  /** Money taken for the day, VAT included and returns deducted. */
+  takings: Money;
+  returns: Money;
+  cogs: Money;
+  profit: Money | null;
+}
+
+export interface MonthlySummary extends SummaryTotals {
+  month: string;
+  from: string;
+  to: string;
+  payments: PaymentTotal[];
+  days: MonthDayTotal[];
+  chart: ReportChart;
+  html: string;
+}
+
+/* ---- end-of-day reconciliation ---- */
+
+export interface ShiftReconciliation {
+  shiftId: number;
+  username: string;
+  openedAt: string;
+  closedAt: string | null;
+  openingFloat: Money;
+  cashSales: Money;
+  cashRefunds: Money;
+  expectedCash: Money;
+  countedCash: Money | null;
+  variance: Money | null;
+  status: 'OPEN' | 'CLOSED';
+}
+
+export interface CashierReconciliation {
+  userId: number;
+  username: string;
+  fullName: string;
+  salesCount: number;
+  gross: Money;
+  cashSales: Money;
+  cashRefunds: Money;
+  expectedCash: Money;
+  countedCash: Money | null;
+  variance: Money | null;
+}
+
+export interface DayReconciliation {
+  businessDate: string;
+  openingFloat: Money;
+  salesCount: number;
+  grossSales: Money;
+  discounts: Money;
+  cashSales: Money;
+  transferSales: Money;
+  posSales: Money;
+  otherSales: Money;
+  returnsTotal: Money;
+  cashRefunds: Money;
+  expectedCash: Money;
+  countedCash: Money | null;
+  variance: Money | null;
+  closedAt: string | null;
+  closedBy: string | null;
+  note: string | null;
+  canClose: boolean;
+  /** True on supermarket licences: shift and cashier reconciliation is shown. */
+  shiftReconciliation: boolean;
+  shifts: ShiftReconciliation[];
+  cashiers: CashierReconciliation[];
 }
 
 export interface DashboardSummary {

@@ -147,8 +147,80 @@ const RESPONSES: Record<string, unknown> = {
   'backup.list': [],
   'settings.read': settings,
   'license.history': [],
-  'products.categories': []
+  'products.categories': [],
+  'reports.catalogue': [],
+  'reports.daily': {
+    date: today(),
+    salesCount: 0,
+    retailCount: 0,
+    retailSales: 0,
+    wholesaleCount: 0,
+    wholesaleSales: 0,
+    grossSales: 0,
+    discounts: 0,
+    tax: 0,
+    returnsCount: 0,
+    returnsTotal: 0,
+    netSales: 0,
+    netSalesInclVat: 0,
+    cogs: 0,
+    grossProfit: 0,
+    payments: [],
+    users: [],
+    scopeUserId: null,
+    html: ''
+  },
+  'reports.monthly': {
+    month: today().slice(0, 7),
+    from: `${today().slice(0, 7)}-01`,
+    to: today(),
+    salesCount: 0,
+    retailCount: 0,
+    retailSales: 0,
+    wholesaleCount: 0,
+    wholesaleSales: 0,
+    grossSales: 0,
+    discounts: 0,
+    tax: 0,
+    returnsCount: 0,
+    returnsTotal: 0,
+    netSales: 0,
+    netSalesInclVat: 0,
+    cogs: 0,
+    grossProfit: 0,
+    payments: [],
+    days: [],
+    chart: { labels: [], values: [] },
+    html: ''
+  },
+  'operations.day.reconcile': {
+    businessDate: today(),
+    openingFloat: 0,
+    salesCount: 0,
+    grossSales: 0,
+    discounts: 0,
+    cashSales: 0,
+    transferSales: 0,
+    posSales: 0,
+    otherSales: 0,
+    returnsTotal: 0,
+    cashRefunds: 0,
+    expectedCash: 0,
+    countedCash: null,
+    variance: null,
+    closedAt: null,
+    closedBy: null,
+    note: null,
+    canClose: true,
+    shiftReconciliation: false,
+    shifts: [],
+    cashiers: []
+  }
 };
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 let container: HTMLDivElement;
 let root: Root;
@@ -198,7 +270,7 @@ const cases: { name: string; node: React.ReactNode; expect: string }[] = [
   { name: 'inventory', node: <InventoryPage />, expect: 'Stock on hand' },
   { name: 'stocktake', node: <StocktakePage />, expect: 'Start new count' },
   { name: 'purchase orders', node: <PurchaseOrdersPage />, expect: 'Orders and goods received' },
-  { name: 'reports', node: <ReportsPage />, expect: 'Run report' },
+  { name: 'reports', node: <ReportsPage />, expect: 'Daily summary' },
   { name: 'users', node: <UsersPage />, expect: 'Add user' },
   { name: 'settings', node: <SettingsPage />, expect: 'Store identity' },
   { name: 'backup', node: <BackupPage />, expect: 'Back up now' },

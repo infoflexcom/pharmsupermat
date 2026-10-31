@@ -1,5 +1,5 @@
 import type { ApiContext } from '../../services/session';
-import type { FeatureFlags } from '../../shared/types';
+import type { FeatureFlags, ReportRequest } from '../../shared/types';
 import type { Permission } from '../../shared/permissions';
 import { AppError, validation } from '../../shared/errors';
 import type { HandlerArgs } from './invoke';
@@ -80,7 +80,9 @@ import {
   printReturnDocument,
   rejectReturn
 } from '../../services/returns';
-import { buildReport } from '../../services/reports';
+import { assertReportAllowed, buildReport, REPORT_CATALOGUE } from '../../services/reports';
+import { reportFileName, reportToCsv, reportToExcel } from '../../services/reportExport';
+import { dailySummary, monthlySummary } from '../../services/accounting';
 import {
   listCategoryRecords,
   listCustomerRecords,
@@ -102,7 +104,7 @@ import {
   type PurchaseInput,
   type PurchaseOrderInput
 } from '../../services/purchases';
-import { closeDay, computeDayTotals, listDayClosings } from '../../services/operations';
+import { closeDay, computeDayTotals, dayReconciliation, listDayClosings } from '../../services/operations';
 import { getDashboard } from '../../services/dashboard';
 import {
   createUser,
@@ -149,6 +151,35 @@ function editionSafeProduct(input: ProductInput, features: FeatureFlags): Produc
     expiryTracking: features.pharmacy ? true : features.supermarket ? input.expiryTracking : false,
     openingExpiry: features.pharmacy || features.supermarket ? input.openingExpiry : null
   };
+}
+
+/**
+ * Builds a report with the caller's own scope: a cashier sees only their own
+ * sales for today (the same rule as the till), supervisors and administrators
+ * see the shop. Cost and profit are selected only for an administrator.
+ */
+function buildReportForSession(args: HandlerArgs, request: ReportRequest) {
+  const session = requireSession(args);
+  const entry = assertReportAllowed(request.kind, args.features);
+  if (entry.permission === 'audit.view' && !session.permissions.includes('audit.view')) {
+    throw new AppError('FORBIDDEN', 'You cannot view the audit trail.');
+  }
+  if (entry.permission === 'reports.view.all' && !session.permissions.includes('reports.view.all')) {
+    throw new AppError('FORBIDDEN', 'This report is for supervisors and administrators.');
+  }
+  const canSeeAll = session.permissions.includes('reports.view.all');
+  const today = new Date().toISOString().slice(0, 10);
+  return buildReport(
+    {
+      db: args.ctx.db,
+      store: getStoreProfile(args.ctx.db),
+      productName: args.features.productName,
+      includeProfit: session.role === 'ADMIN',
+      features: args.features,
+      ...(canSeeAll ? {} : { scopeUserId: session.userId })
+    },
+    canSeeAll ? request : { ...request, from: today, to: today }
+  );
 }
 
 export const CORE_HANDLERS: Handler[] = [
@@ -739,8 +770,22 @@ export const CORE_HANDLERS: Handler[] = [
     handler: (args) => listDayClosings(args.ctx.db, payloadOf<{ limit?: number }>(args)?.limit ?? 60)
   },
   {
+    channel: 'operations.day.reconcile',
+    permission: 'reports.view.all',
+    handler: (args) => {
+      const payload = payloadOf<{ businessDate?: string; openingFloat?: number }>(args) ?? {};
+      const date = payload.businessDate?.trim() || new Date().toISOString().slice(0, 10);
+      return dayReconciliation(args.ctx.db, date, {
+        // Omit it when the caller did not type one: the saved day's own float
+        // is then used, so a reopened day reconciles exactly as it was closed.
+        ...(payload.openingFloat !== undefined ? { openingFloat: payload.openingFloat } : {}),
+        includeShifts: args.features.supermarket
+      });
+    }
+  },
+  {
     channel: 'operations.day.close',
-    permission: 'settings.manage',
+    permission: 'reports.view.all',
     handler: (args) =>
       closeDay(
         args.ctx.db,
@@ -1073,26 +1118,116 @@ export const CORE_HANDLERS: Handler[] = [
     channel: 'reports.build',
     permission: 'reports.view.own',
     handler: (args) => {
+      const request = payloadOf<ReportRequest>(args);
+      if (!request?.kind) throw validation('Choose a report.');
+      return buildReportForSession(args, request);
+    }
+  },
+  {
+    channel: 'reports.catalogue',
+    permission: 'reports.view.own',
+    handler: (args) => {
       const session = requireSession(args);
-      const request = payloadOf<{ kind: Parameters<typeof buildReport>[1]['kind']; from?: string; to?: string; limit?: number }>(args);
+      return REPORT_CATALOGUE.filter((entry) => {
+        if (entry.owner === 'PHARMACY' && !args.features.pharmacy) return false;
+        if (entry.owner === 'SUPERMARKET' && !args.features.supermarket) return false;
+        if (entry.permission && !session.permissions.includes(entry.permission)) return false;
+        if (entry.adminOnly && session.role !== 'ADMIN') return false;
+        return true;
+      });
+    }
+  },
+  {
+    channel: 'reports.daily',
+    permission: 'reports.view.own',
+    handler: (args) => {
+      const session = requireSession(args);
       const canSeeAll = session.permissions.includes('reports.view.all');
-      if (request.kind === 'AUDIT' && !session.permissions.includes('audit.view')) {
-        throw new AppError('FORBIDDEN', 'You cannot view the audit trail.');
-      }
-      const today = new Date().toISOString().slice(0, 10);
-      return buildReport(
+      const { date } = payloadOf<{ date?: string }>(args) ?? {};
+      return dailySummary(
+        args.ctx.db,
+        { ...(date ? { date } : {}) },
         {
-          db: args.ctx.db,
           store: getStoreProfile(args.ctx.db),
           productName: args.features.productName,
-          scopeUserId: canSeeAll ? undefined : session.userId
-        },
-        {
-          ...request,
-          from: canSeeAll ? request.from : today,
-          to: canSeeAll ? request.to : today
+          includeProfit: session.role === 'ADMIN',
+          ...(canSeeAll ? {} : { scopeUserId: session.userId })
         }
       );
+    }
+  },
+  {
+    channel: 'reports.monthly',
+    permission: 'reports.view.own',
+    handler: (args) => {
+      const session = requireSession(args);
+      const canSeeAll = session.permissions.includes('reports.view.all');
+      const { month } = payloadOf<{ month?: string }>(args) ?? {};
+      return monthlySummary(
+        args.ctx.db,
+        { ...(month ? { month } : {}) },
+        {
+          store: getStoreProfile(args.ctx.db),
+          productName: args.features.productName,
+          includeProfit: session.role === 'ADMIN',
+          ...(canSeeAll ? {} : { scopeUserId: session.userId })
+        }
+      );
+    }
+  },
+  {
+    channel: 'reports.export',
+    permission: 'reports.view.own',
+    handler: (args) => {
+      const request = payloadOf<ReportRequest>(args);
+      if (!request?.kind) throw validation('Choose a report to export.');
+      const report = buildReportForSession(args, request);
+      return {
+        filename: reportFileName(report, request.from),
+        data: reportToCsv(report, getStoreProfile(args.ctx.db)),
+        encoding: 'utf8' as const,
+        mime: 'text/csv'
+      };
+    }
+  },
+  {
+    // A real workbook: the table, the meta summary and a bold total row, with
+    // money as naira numbers so Excel can add them up.
+    channel: 'reports.excel',
+    permission: 'reports.view.own',
+    handler: async (args) => {
+      const request = payloadOf<ReportRequest>(args);
+      if (!request?.kind) throw validation('Choose a report to export.');
+      const report = buildReportForSession(args, request);
+      const buffer = await reportToExcel(report, getStoreProfile(args.ctx.db));
+      return {
+        filename: reportFileName(report, request.from).replace(/\.csv$/, '.xlsx'),
+        data: buffer.toString('base64'),
+        encoding: 'base64' as const,
+        mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      };
+    }
+  },
+  {
+    channel: 'reports.pdf',
+    permission: 'reports.view.own',
+    handler: async (args) => {
+      const request = payloadOf<ReportRequest>(args);
+      if (!request?.kind) throw validation('Choose a report to export.');
+      const report = buildReportForSession(args, request);
+      if (!args.ctx.pdf) {
+        throw new AppError(
+          'UNAVAILABLE',
+          'PDF export runs inside the desktop app. Use Print and choose “Save as PDF”, or export a CSV here.'
+        );
+      }
+      const buffer = await args.ctx.pdf({ html: report.html, title: report.title });
+      return {
+        filename: `${report.kind.toLowerCase()}-${request.from ?? new Date().toISOString().slice(0, 10)}.pdf`,
+        data: buffer.toString('base64'),
+        encoding: 'base64' as const,
+        mime: 'application/pdf'
+      };
     }
   },
 

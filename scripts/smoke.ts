@@ -556,6 +556,79 @@ async function main() {
     });
   }
 
+  const today = new Date().toISOString().slice(0, 10);
+  const daysInMonth = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0)).getUTCDate();
+
+  await check('daily summary agrees with the dashboard', async () => {
+    const daily = await api<{
+      salesCount: number;
+      netSales: number;
+      grossProfit: number | null;
+      html: string;
+      payments: { amount: number }[];
+    }>('reports.daily', { date: today });
+    const dashboard = await api<{ todayTransactions: number; todaySales: number }>('dashboard.get');
+    // The dashboard tile counts retail receipts; the accounting summary also
+    // counts wholesale invoices, so it can only be larger.
+    assert(
+      daily.salesCount >= dashboard.todayTransactions,
+      `sales ${daily.salesCount} vs dashboard ${dashboard.todayTransactions}`
+    );
+    assert(daily.netSales > 0, 'no net sales for today');
+    assert(daily.grossProfit !== null, 'an administrator must see gross profit');
+    assert(daily.html.includes('Grace Pharmacy'), 'store name missing from the daily summary');
+    assert(Array.isArray(daily.payments) && daily.payments.length > 0, 'no payment breakdown');
+  });
+
+  await check('monthly summary lists every day of the month with a chart', async () => {
+    const month = await api<{ days: unknown[]; chart: { labels: string[]; values: number[] }; netSales: number; html: string }>(
+      'reports.monthly',
+      { month: today.slice(0, 7) }
+    );
+    assert(month.days.length === daysInMonth, `day table has ${month.days.length} rows, expected ${daysInMonth}`);
+    assert(month.chart.values.length === daysInMonth, 'chart is missing days');
+    assert(month.netSales > 0, 'no monthly sales');
+    assert(month.html.includes('Grace Pharmacy'), 'store name missing from the monthly summary');
+  });
+
+  await check('end-of-day reconciliation explains the expected cash', async () => {
+    const recon = await api<{ expectedCash: number; cashSales: number; cashRefunds: number; openingFloat: number }>(
+      'operations.day.reconcile',
+      { businessDate: today }
+    );
+    assert(
+      recon.expectedCash === recon.openingFloat + recon.cashSales - recon.cashRefunds,
+      'expected cash does not add up'
+    );
+  });
+
+  await check('reports export to CSV with the store name and a total row', async () => {
+    const csv = await api<{ filename: string; data: string; encoding: string }>('reports.export', {
+      kind: 'SALES_SUMMARY',
+      from: today,
+      to: today
+    });
+    assert(csv.filename.endsWith('.csv'), `unexpected filename ${csv.filename}`);
+    assert(csv.data.includes('Grace Pharmacy'), 'store name missing from the CSV');
+    assert(csv.data.includes('Total'), 'CSV has no total row');
+  });
+
+  await check('reports export a real Excel workbook', async () => {
+    const excel = await api<{ filename: string; data: string; encoding: string }>('reports.excel', {
+      kind: 'SALES_SUMMARY',
+      from: today,
+      to: today
+    });
+    assert(excel.filename.endsWith('.xlsx'), `unexpected filename ${excel.filename}`);
+    assert(excel.encoding === 'base64', 'workbook should be base64');
+    const buffer = Buffer.from(excel.data, 'base64');
+    assert(buffer.subarray(0, 2).toString('latin1') === 'PK', 'the export is not a workbook');
+  });
+
+  await check('PDF export says so plainly when no print engine is present', async () => {
+    await expectError('reports.pdf', { kind: 'SALES_SUMMARY' }, 'UNAVAILABLE');
+  });
+
   await check('dashboard aggregates today', async () => {
     const dashboard = await api<{ todayTransactions: number; todaySales: number }>('dashboard.get');
     assert(dashboard.todayTransactions >= 1, 'no transactions');

@@ -249,6 +249,8 @@ export interface Column<T> {
   key: string;
   label: string;
   align?: 'left' | 'right';
+  /** Format the raw value as naira when the cell is a kobo amount. */
+  money?: boolean;
   render?: (row: T) => React.ReactNode;
 }
 
@@ -257,12 +259,15 @@ export function DataTable<T>({
   rows,
   empty = 'Nothing to show yet.',
   onRowClick,
+  getKey,
   footer
 }: {
   columns: Column<T>[];
   rows: T[];
   empty?: string;
   onRowClick?: (row: T) => void;
+  /** Stable row key; the array index is used when absent. */
+  getKey?: (row: T) => string;
   footer?: React.ReactNode;
 }) {
   return (
@@ -287,15 +292,22 @@ export function DataTable<T>({
           ) : (
             rows.map((row, index) => (
               <tr
-                key={index}
+                key={getKey ? getKey(row) : index}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 style={onRowClick ? { cursor: 'pointer' } : undefined}
               >
-                {columns.map((c) => (
-                  <td key={c.key} className={c.align === 'right' ? 'num' : ''}>
-                    {c.render ? c.render(row) : String((row as Record<string, unknown>)[c.key] ?? '')}
-                  </td>
-                ))}
+                {columns.map((c) => {
+                  const raw = (row as Record<string, unknown>)[c.key];
+                  return (
+                    <td key={c.key} className={c.align === 'right' ? 'num' : ''}>
+                      {c.render
+                        ? c.render(row)
+                        : c.money && typeof raw === 'number'
+                          ? formatMoney(raw)
+                          : String(raw ?? '')}
+                    </td>
+                  );
+                })}
               </tr>
             ))
           )}

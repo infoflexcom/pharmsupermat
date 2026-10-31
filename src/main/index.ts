@@ -7,7 +7,7 @@ import { invoke } from './api/invoke';
 import { getLicenseStatus } from '../license/license';
 import { evaluateLicense } from '../license/guard';
 import { productNameForEdition } from '../shared/editions';
-import { printHtml } from './print/printer';
+import { pdfHtml, printHtml } from './print/printer';
 import { createBackup, listBackups } from '../services/backup';
 import { audit } from '../services/audit';
 
@@ -239,7 +239,8 @@ app.whenReady().then(async () => {
     dataDir,
     backupsDir,
     version: APP_VERSION,
-    print: printHtml
+    print: printHtml,
+    pdf: pdfHtml
   });
   ensureDailyBackup(ctx);
   startLicenseWatch();

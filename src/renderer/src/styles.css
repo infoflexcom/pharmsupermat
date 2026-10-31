@@ -1785,3 +1785,64 @@ table.data tfoot td {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------------------------------------------------------------- */
+/* Reports: inline figures and the daily bar chart                   */
+/* ---------------------------------------------------------------- */
+.figure {
+  min-width: 130px;
+}
+
+.figure .good {
+  color: var(--ok);
+}
+
+.figure .bad {
+  color: var(--danger);
+}
+
+.report-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 160px;
+  padding: 10px 4px 0;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(to top, rgba(201, 162, 75, 0.06), transparent);
+  border-radius: 8px 8px 0 0;
+}
+
+.report-chart-col {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  height: 100%;
+  min-width: 8px;
+}
+
+.report-chart-bar {
+  width: 100%;
+  max-width: 26px;
+  background: linear-gradient(to top, var(--navy), var(--navy-soft));
+  border-radius: 3px 3px 0 0;
+  transition: height 160ms ease;
+}
+
+.report-chart-col:hover .report-chart-bar {
+  background: linear-gradient(to top, var(--gold), var(--gold-soft));
+}
+
+.report-chart-label {
+  font-size: 9px;
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: 1;
+}
+
+@media print {
+  .report-chart {
+    background: none;
+  }
+}
