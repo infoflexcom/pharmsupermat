@@ -295,8 +295,33 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
     });
   }
 
-  function addToCart(product: Product) {
+  function addToCart(product: Product, scannedQty: number | null = null) {
     if (product.isWeighed) {
+      if (scannedQty && scannedQty > 0) {
+        // The scale already weighed it: put the line straight in.
+        setCart((current) => {
+          const existing = current.find((line) => line.productId === product.id);
+          if (existing) {
+            return current.map((line) =>
+              line.productId === product.id ? { ...line, qty: Math.min(line.qty + scannedQty, Math.max(product.stockQty, 0)) } : line
+            );
+          }
+          return [
+            ...current,
+            {
+              productId: product.id,
+              name: product.name,
+              sku: product.sku,
+              listPrice: priceFor(product),
+              unitPrice: priceFor(product),
+              qty: Math.min(scannedQty, Math.max(product.stockQty, 0)),
+              stockQty: product.stockQty,
+              rxRequired: product.rxRequired
+            }
+          ];
+        });
+        return;
+      }
       setWeighFor(product);
       setWeightInput('');
       return;
@@ -338,9 +363,15 @@ export default function PosPage({ mode }: { mode: 'RETAIL' | 'INVOICE' }) {
     event.preventDefault();
     const term = search.trim();
     if (!term) return;
-    const match = await api<Product | null>('products.lookup', { code: term });
+    const match = await api<{ product: Product; scannedQty: number | null; scaleBarcode: boolean } | null>(
+      'products.scan',
+      { code: term }
+    );
     if (match) {
-      addToCart(match);
+      addToCart(match.product, match.scannedQty);
+      if (match.scaleBarcode && match.scannedQty) {
+        notify(`Scale label: ${(match.scannedQty / 1000).toFixed(3)} kg of ${match.product.name} added.`, 'success');
+      }
       setSearch('');
     } else if (products.length === 1) {
       addToCart(products[0]);

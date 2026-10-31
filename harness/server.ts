@@ -17,6 +17,7 @@ import { Database } from '../src/db';
 import { createContext } from '../src/services/session';
 import { invoke } from '../src/main/api/invoke';
 import { getLicenseStatus } from '../src/license/license';
+import { runDailyBackup } from '../src/services/backup';
 
 const ROOT = join(__dirname, '..');
 const DATA_DIR = process.env.INFOFLEX_DATA_DIR
@@ -35,6 +36,13 @@ async function main() {
     backupsDir: BACKUPS_DIR,
     version: '1.0.0-dev (browser harness)'
   });
+
+  try {
+    // Same daily safety net as the desktop app, so the preview behaves alike.
+    runDailyBackup(db, BACKUPS_DIR);
+  } catch (error) {
+    console.error('[backup] automatic backup failed', error);
+  }
 
   const vite = await createViteServer({
     root: join(ROOT, 'src/renderer'),

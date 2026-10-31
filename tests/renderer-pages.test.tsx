@@ -114,7 +114,30 @@ const settings = {
   returnWindowDays: 7,
   lowStockAlerts: true,
   licenseExpiryWarningDays: 30,
-  idleTimeoutMinutes: 15
+  idleTimeoutMinutes: 15,
+  vatEnabled: true,
+  vatRate: 7.5,
+  maxDiscountPercent: 10,
+  paymentCash: true,
+  paymentTransfer: true,
+  paymentPos: false,
+  paymentCredit: false,
+  poweredByFooter: true,
+  receiptLayout: 'THERMAL_80',
+  customerDisplay: false,
+  requireShift: false,
+  loyaltyPointsPer100: 1,
+  loyaltyPointValue: 100,
+  loyaltyRedeemEnabled: false,
+  printerName: '',
+  silentPrint: false,
+  labelPrinterName: '',
+  expiryAlertDays: 90,
+  approvalTtlMinutes: 5,
+  supervisorSelfApproval: true,
+  scalePrefix: '2',
+  scalePluDigits: 5,
+  scaleWeightDigits: 5
 };
 
 const dashboard = {
@@ -145,6 +168,22 @@ const RESPONSES: Record<string, unknown> = {
   'users.list': [],
   'audit.list': [],
   'backup.list': [],
+  'backup.status': {
+    count: 0,
+    lastAt: null,
+    daysSince: null,
+    stale: true,
+    warnAfterDays: 7,
+    automatic: true,
+    backupsDir: 'C:\\ProgramData\\Infoflex\\backups'
+  },
+  'print.printers': [{ name: 'EPSON TM-T20III', displayName: 'EPSON TM-T20III Receipt', isDefault: true }],
+  'settings.preview': {
+    html: '<html><body><h1>Grace Pharmacy</h1></body></html>',
+    layout: 'THERMAL_80',
+    settings,
+    dirty: true
+  },
   'settings.read': settings,
   'license.history': [],
   'products.categories': [],
@@ -286,4 +325,60 @@ describe('every screen renders', () => {
       expect(el.querySelector('.alert.error')).toBeNull();
     });
   }
+});
+
+describe('phase 9 screens', () => {
+  it('shows the printing, pharmacy, supermarket and licence sections', async () => {
+    const el = await mount(<SettingsPage />);
+    // The preview is debounced, so let it settle before looking at the frame.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    });
+    const text = el.textContent ?? '';
+    expect(text).toContain('Live receipt preview');
+    expect(text).toContain('Printing & hardware');
+    expect(text).toContain('Weighing scale barcodes');
+    expect(text).toContain('Expiry alert (days)');
+    expect(text).toContain('Supervisor approvals');
+    expect(text).toContain('Approval valid for (minutes)');
+    expect(text).toContain('Edition & licence');
+    // The live preview renders the HTML main returned, in a sandboxed frame.
+    const frame = el.querySelector('iframe.doc-preview') as HTMLIFrameElement | null;
+    expect(frame).toBeTruthy();
+    expect(frame?.getAttribute('srcdoc') ?? '').toContain('Grace Pharmacy');
+  });
+
+  it('warns when there has been no backup and offers a folder', async () => {
+    const el = await mount(<BackupPage />);
+    const text = el.textContent ?? '';
+    expect(text).toContain('no backup on this computer yet');
+    expect(text).toContain('Back up to a folder');
+    expect(text).toContain('Where is my data?');
+  });
+
+  it('asks the operator to type the file name before restoring', async () => {
+    const el = await mount(<BackupPage />);
+    const input = el.querySelector('input[placeholder^="D:"]') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(input, 'D:\\infoflex-backup_2026-03-05_manual.db');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const restoreButton = Array.from(el.querySelectorAll('button')).find((button) =>
+      (button.textContent ?? '').includes('Restore this file')
+    );
+    expect(restoreButton).toBeTruthy();
+    expect(restoreButton?.disabled).toBe(false);
+    await act(async () => {
+      restoreButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const dialog = el.querySelector('[role="dialog"]');
+    expect(dialog?.textContent ?? '').toContain('infoflex-backup_2026-03-05_manual.db');
+    const confirmButton = Array.from(el.querySelectorAll('button')).find(
+      (button) => (button.textContent ?? '').trim() === 'Restore backup'
+    );
+    // Nothing can be restored until the file name is typed.
+    expect(confirmButton?.disabled).toBe(true);
+  });
 });

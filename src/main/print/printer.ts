@@ -7,6 +7,10 @@ import { BrowserWindow } from 'electron';
 export async function printHtml(payload: {
   html: string;
   title: string;
+  /** Chosen in Settings; empty means the system dialog decides. */
+  deviceName?: string;
+  /** Print straight to `deviceName` without showing the dialog. */
+  silent?: boolean;
 }): Promise<{ printed: boolean; message: string }> {
   return new Promise((resolve) => {
     const win = new BrowserWindow({
@@ -28,8 +32,14 @@ export async function printHtml(payload: {
     win.webContents
       .loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(payload.html)}`)
       .then(() => {
+        const silent = Boolean(payload.silent && payload.deviceName);
         win.webContents.print(
-          { silent: false, printBackground: true, margins: { marginType: 'default' } },
+          {
+            silent,
+            printBackground: true,
+            margins: { marginType: 'default' },
+            ...(payload.deviceName ? { deviceName: payload.deviceName } : {})
+          },
           (success, failureReason) => {
             cleanup();
             resolve({
@@ -47,6 +57,23 @@ export async function printHtml(payload: {
         });
       });
   });
+}
+
+/** The printers Windows reports, so Settings can offer a list instead of typing. */
+export async function listPrinters(): Promise<{ name: string; displayName: string; isDefault: boolean }[]> {
+  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true } });
+  try {
+    const printers = await win.webContents.getPrintersAsync();
+    return printers.map((printer) => ({
+      name: printer.name,
+      displayName: printer.displayName || printer.name,
+      // Chromium's PrinterInfo does not tell us which printer is the system
+      // default, so the flag stays false and the list is alphabetical.
+      isDefault: false
+    }));
+  } finally {
+    if (!win.isDestroyed()) win.destroy();
+  }
 }
 
 /**

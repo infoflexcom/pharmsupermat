@@ -865,3 +865,178 @@ hand-checked in `tests/reports-phase8.test.ts` against a ledger written by the t
   exists.
 - **The daily sales chart is a plain HTML bar chart**, not an image: it prints and scales but
   cannot be exported on its own.
+
+## 41. Settings that belong to an edition
+
+The Settings page is one payload (`SettingsPayload`) because the store profile,
+tax and till rules are shared, but the edition-specific blocks only appear — and
+only validate — for the edition the licence carries:
+
+- **Pharmacy:** `expiryAlertDays` (1–730, default 90) moves the expiring-batch
+  window on the dashboard, the stock alerts and the expiry reports. One number,
+  read once in the main process, so the badge and the report can never disagree.
+- **Supermarket:** `approvalTtlMinutes` (1–60, default 5), `supervisorSelfApproval`
+  (default on), the `labelPrinterName` and the scale layout.
+- **Both editions:** printer name, silent printing, VAT, currency (fixed NGN),
+  discount limit, return window, idle timeout, payment methods.
+
+They are *edition-gated in the renderer only*; the values live in the settings
+table and are harmless where they do not apply (a pharmacy install simply never
+reads the scale layout). This is the same line the modules take: the sidebar and
+the IPC handlers enforce the edition for data (products, sales, reports), while a
+display-only preference is not worth an `EDITION_RESTRICTED` error.
+
+**Approvals.** The TTL used to be a constant. It is now read from settings each
+time a token is issued, and the rule "who may approve" is unchanged and enforced
+in `approvals.ts`, not in the UI: a supervisor or cashier can never approve their
+own override. An **Administrator** may, but only while
+`supervisorSelfApproval` is on — the setting narrows the Admin's own power, it
+never widens a supervisor's.
+
+## 42. The live receipt preview is a draft render, not a save
+
+`settings.preview` takes the renderer's current — possibly unsaved — settings
+object, merges it over the stored settings (`{...saved, ...cleanDraft(draft)}`),
+builds a sample sale and renders it through the same `buildSaleDocument` used for
+a real receipt. Consequences worth knowing:
+
+- **No database write.** Typing a store name never changes the stored name; only
+  **Save** does. A test asserts the stored name is unchanged after a preview.
+- **The draft is cleaned, not trusted.** Only fields on the settings payload and
+  of the right type are merged, so a renderer bug cannot inject a logo or a
+  footer that the database would never hold.
+- **An empty store name falls back to the saved one.** A real save refuses an
+  empty name; refusing to preview one would show a blank paper mid-edit and
+  teach nothing. The header keeps the saved name until the box has one.
+- **It answers `dirty`** so the page can say "unsaved changes" instead of
+  implying the paper is what the shop will print next. The comparison is shallow
+  key-by-key, which is enough for scalar settings.
+- **Permission `settings.manage`.** The preview exposes the store profile and
+  the document template; cashiers have no business reading it.
+
+## 43. Backups: automatic, external, and a restore you cannot do by accident
+
+- **One snapshot a day.** `runDailyBackup` runs when the desktop app starts (and
+  on clean shutdown) and returns `null` when the newest `auto`/`shutdown` backup
+  is less than 24 hours old. It also returns `null` when the licence state is
+  `NONE`: an unactivated machine has nothing worth keeping and must not collect
+  empty files. The browser harness calls the same function, so the behaviour is
+  tested through the same door the desktop uses.
+- **Snapshots are `VACUUM INTO`.** One statement, consistent, no WAL juggling,
+  and it compacts as it writes. Two GB cap, symlinks refused, and a real
+  integrity check (`PRAGMA integrity_check`) plus "does it contain sales,
+  products, users and settings" before any restore is allowed near it.
+- **"Back up to a folder" writes straight to the folder** rather than copying
+  afterwards: a USB stick that dies halfway through a copy should fail the
+  backup, not produce a good file in the app folder that the operator believes
+  is on the stick. `copyBackupTo` exists for the other case — pushing an *older*
+  backup out — and probes writability with a mkdir/rmdir before trying.
+- **Typed confirmation.** `backup.restore` takes `{path, confirm}` and refuses
+  unless `confirm` is exactly `basename(path)`. The button in the UI is disabled
+  until the name matches, but the check is in the handler, so a script or a
+  stray IPC call cannot wipe a shop with one argument. A wrong name is
+  `VALIDATION`, and the live database is untouched.
+- **A safety copy is always written first** (`pre-restore_<dbfile>_<ts>.db` in
+  the backups folder). It is never pruned by the daily routine because it is
+  labelled `pre-restore`, so a mistaken restore can be undone from the same
+  screen.
+- **WAL sidecars are deleted** after closing and before the swap, otherwise a
+  stale `-wal` from the old database could be replayed over the restored file on
+  the next open.
+- **Staleness is seven days.** `backupStatus` compares the newest file with the
+  clock and sets `stale`; the dashboard (Admin only) and the Backup page both
+  show it. Seven days is a working week: long enough not to nag, short enough
+  that a shop never loses more than a week of trading.
+
+## 44. A restore never touches the licence
+
+The licence is the vendor's property, not the shop's data. `restoreBackup`
+therefore:
+
+1. captures `license_state`, `license_guard`, `license_history` and
+   `license_attempts` **row for row, with their columns**, before anything moves;
+2. closes the database, removes the WAL/SHM sidecars, and puts the backup file
+   in place (rename, falling back to a copy across volumes);
+3. re-opens (migrations run against the restored file), reads what the file
+   itself carried for the audit trail, then **deletes and re-inserts the captured
+   licence rows** inside one transaction;
+4. returns `{restoredFrom, safetyCopy, license, backupLicense}` and clears every
+   session.
+
+So restoring *another shop's* backup brings that shop's products and sales but
+leaves this machine's edition, period and history exactly as they were; an
+expired licence stays expired and a valid one is not extended. The licence's own
+state is never a precondition for restoring either — refusing to restore because
+the licence is broken would trap an operator who is trying to recover the shop.
+The safety copy is the protection, not the licence. A test restores a
+supermarket's backup into a pharmacy install and asserts edition, expiry and the
+history row count all survived.
+
+## 45. Scale barcodes carry the weight
+
+`parseScaleBarcode(code, layout)` accepts a code only when it is **all digits**,
+starts with the configured prefix, and its length is exactly
+`prefix + pluDigits + weightDigits` **or one longer** (some scales append a check
+digit). The PLU slice must find a product by barcode/SKU/PLU, the weight must be
+greater than zero, and the result is grams — the same unit `sale_items.qty` uses
+for weighed goods.
+
+The EAN-13 check digit is **not** verified. Scale manufacturers print their own
+layouts, many do not compute a valid EAN check digit at all, and rejecting a
+label at the till forces the cashier to weigh again and key it by hand, which is
+both slower and more error-prone than trusting a barcode the shop's own scale
+printed. Ordinary barcodes are still looked up directly first, so a real EAN
+never reaches the scale parser unless no product carries it.
+
+`products.scan` is the single entry point for both scanners and the API
+(`{code}` → `{product, scannedQty, scaleBarcode}` or `null`); the till uses
+`scannedQty` to open a weighed line clamped to stock, and cashiers get the same
+`products.view` check as the product search.
+
+## 46. Hardening in phase 9
+
+- **IPC payload cap.** `invoke` measures `JSON.stringify(payload)` and refuses
+  anything over 4 MB with `VALIDATION` *before* resolving the session or touching
+  a service. The largest legitimate payload is an imported product list or a
+  logo data URL by a long way; the cap stops a renderer bug or a malicious
+  script from making better-sqlite3 or the audit writer do unbounded work.
+- **Audit redaction.** `audit()` passes `details` through `redactDetails`, which
+  walks the object/array and replaces the value of any key matching
+  `pass|password|pin|token|secret|hash|authorization|license_code|activation_code`
+  with `[redacted]`. The master password is never placed in an audit entry at
+  all, but the rule protects future fields and the one-off detail blobs.
+- **Settings audit stores keys, not values.** `settings.update` records
+  `{changed: [...], storeName}`. A logo data URL would have added hundreds of
+  kilobytes to the audit table on every save, and the values are visible in the
+  Settings page anyway. (This also keeps the redaction rule from having to guess
+  which settings are secret.)
+- **Printer list is best effort.** `listPrinters()` opens an offscreen window and
+  returns `{name, displayName, isDefault: false}` — Electron's `PrinterInfo` on
+  Windows does not expose a reliable default flag, and inventing one would make
+  the Settings dropdown lie. The page falls back to a free-text printer name when
+  the channel answers `UNAVAILABLE` (browser harness) or Windows reports nothing.
+- **`getNumericSetting` is gone.** Every numeric setting now has a typed field on
+  `SettingsPayload` with validation in `updateSettings`, so the expiry window is
+  read as `getAllSettings(db).expiryAlertDays` and cannot drift from the value
+  the Settings page shows.
+
+## 47. Known limitations after phase 9
+
+- **Silent printing depends on the Windows driver.** Electron hands `silent` and
+  `deviceName` to Chromium; a driver that ignores them shows the dialog anyway.
+  The "Ask each time" option is the safe default.
+- **The printer list is a snapshot.** A printer plugged in after the page loads
+  needs **Find printers** again; the dropdown also keeps a pinned printer that is
+  not currently detected, labelled "(not detected now)".
+- **No scheduled off-machine backup.** The daily snapshot is on the same disk. A
+  USB copy is manual by design (a shop's stick is not always plugged in), and the
+  seven-day warning is the reminder.
+- **No backup pruning.** Old files accumulate until an operator deletes them; the
+  page shows them newest first with their size so the folder never becomes a
+  mystery.
+- **Scale check digits are not verified** (see §45), and only one scale layout at
+  a time is supported.
+- **The audit trail is append-only but not tamper-proof** — an operator with the
+  SQLite file can edit it. It is evidence for a shop, not a cryptographic log.
+- **Restores are local.** Restoring from a network path works if Windows can read
+  it; there is no remote or cloud restore.

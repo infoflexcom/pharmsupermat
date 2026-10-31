@@ -1,7 +1,7 @@
 import type { ApiContext } from '../../services/session';
 import type { FeatureFlags, ReportRequest } from '../../shared/types';
 import type { Permission } from '../../shared/permissions';
-import { AppError, validation } from '../../shared/errors';
+import { AppError, notFound, validation } from '../../shared/errors';
 import type { HandlerArgs } from './invoke';
 import { actor, payloadOf, requireSession, salesActor } from './args';
 import { EDITION_MODULES, editionHandlers } from '../../editions';
@@ -18,8 +18,9 @@ import {
 import { getAppState, completeSetup, getSetupStatus } from '../../services/app';
 import { authenticate, changePassword } from '../../services/auth';
 import { audit, listAudit } from '../../services/audit';
-import { getAllSettings, getNumericSetting, updateSettings } from '../../services/settings';
-import type { CompleteSetupInput, ProductInput } from '../../shared/types';
+import { getAllSettings, updateSettings } from '../../services/settings';
+import { previewReceipt } from '../../services/receiptPreview';
+import type { CompleteSetupInput, ProductInput, SettingsPayload } from '../../shared/types';
 import {
   createProduct,
   getProduct,
@@ -28,7 +29,8 @@ import {
   receiveProductStock,
   setProductActive,
   updateProduct,
-  findProductByCode
+  findProductByCode,
+  scanProduct
 } from '../../services/products';
 import { exportProducts, exportProductsXlsx, exportTemplate, importProducts } from '../../services/imports';
 import { buildPriceLabels } from '../../services/labels';
@@ -113,13 +115,20 @@ import {
   unlockUser,
   updateUser
 } from '../../services/users';
-import { createBackup, listBackups, restoreBackup } from '../../services/backup';
+import {
+  backupStatus,
+  copyBackupTo,
+  createBackup,
+  listBackups,
+  listBackupsIn,
+  restoreBackup
+} from '../../services/backup';
 import { toUserAccount } from '../../services/auth';
 import { buildCreditNoteDocument, buildSaleDocument } from '../../services/documents';
 import { createSession, dropSession, refreshSessionPermissions } from '../../services/session';
 import { getStoreProfile } from '../../services/settings';
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 export interface Handler {
   channel: string;
@@ -403,6 +412,16 @@ export const CORE_HANDLERS: Handler[] = [
 
   /* ---------------- settings ---------------- */
   {
+    // Renders a sample receipt with the *unsaved* draft, so the administrator
+    // sees the store name, footer and VAT on the paper before saving. No write.
+    channel: 'settings.preview',
+    permission: 'settings.manage',
+    handler: (args) => {
+      const { draft } = payloadOf<{ draft?: Partial<SettingsPayload> }>(args) ?? {};
+      return previewReceipt(args.ctx.db, args.features.productName, draft ?? {});
+    }
+  },
+  {
     channel: 'settings.read',
     handler: (args) => getAllSettings(args.ctx.db)
   },
@@ -419,7 +438,12 @@ export const CORE_HANDLERS: Handler[] = [
         userId: session.userId,
         username: session.username,
         severity: 'SECURITY',
-        details: patch
+        // Only which settings changed: a logo data URL or a long footer would
+        // bloat the audit table, and its values are visible in Settings anyway.
+        details: {
+          changed: Object.keys(patch).sort(),
+          storeName: updated.storeName
+        }
       });
       return updated;
     }
@@ -447,6 +471,13 @@ export const CORE_HANDLERS: Handler[] = [
     channel: 'products.lookup',
     permission: 'products.view',
     handler: (args) => findProductByCode(args.ctx.db, payloadOf<{ code: string }>(args).code ?? '')
+  },
+  {
+    // A scan that also understands the shop's scale barcodes: the product plus
+    // the grams the scale weighed, in one round trip.
+    channel: 'products.scan',
+    permission: 'products.view',
+    handler: (args) => scanProduct(args.ctx.db, payloadOf<{ code: string }>(args).code ?? '')
   },
   {
     channel: 'products.categories',
@@ -619,7 +650,7 @@ export const CORE_HANDLERS: Handler[] = [
     handler: (args) => {
       // Pharmacy tracks every batch; the supermarket only alerts on perishables
       // that opted into expiry tracking. The window comes from settings.
-      const days = getNumericSetting(args.ctx.db, 'expiry_alert_days', 90);
+      const days = getAllSettings(args.ctx.db).expiryAlertDays;
       return listStockAlerts(args.ctx.db, days, { trackedOnly: !args.features.pharmacy });
     }
   },
@@ -637,7 +668,7 @@ export const CORE_HANDLERS: Handler[] = [
     channel: 'inventory.expiryWatch',
     permission: 'products.view',
     feature: 'pharmacy',
-    handler: (args) => listStockAlerts(args.ctx.db, getNumericSetting(args.ctx.db, 'expiry_alert_days', 90))
+    handler: (args) => listStockAlerts(args.ctx.db, getAllSettings(args.ctx.db).expiryAlertDays)
   },
   {
     channel: 'prescriptions.log',
@@ -1109,7 +1140,7 @@ export const CORE_HANDLERS: Handler[] = [
       const canSeeAll = session.permissions.includes('reports.view.all');
       return getDashboard(args.ctx.db, {
         scopeUserId: canSeeAll ? undefined : session.userId,
-        expiryWindowDays: getNumericSetting(args.ctx.db, 'expiry_alert_days', 90),
+        expiryWindowDays: getAllSettings(args.ctx.db).expiryAlertDays,
         trackedOnly: !args.features.pharmacy
       });
     }
@@ -1293,14 +1324,21 @@ export const CORE_HANDLERS: Handler[] = [
     permission: 'backup.manage',
     handler: (args) => {
       const session = requireSession(args);
-      const info = createBackup(args.ctx.db, args.ctx.backupsDir, payloadOf<{ label?: string }>(args)?.label);
+      const payload = payloadOf<{ label?: string; folder?: string }>(args) ?? {};
+      const info = createBackup(
+        args.ctx.db,
+        args.ctx.backupsDir,
+        payload.label?.trim() || 'manual',
+        payload.folder ? { folder: payload.folder } : {}
+      );
       audit(args.ctx.db, {
         action: 'backup.create',
         entity: 'backup',
         entityId: info.name,
         userId: session.userId,
         username: session.username,
-        severity: 'SECURITY'
+        severity: 'SECURITY',
+        details: info.external ? { folder: dirname(info.path), external: true } : { automatic: false }
       });
       return info;
     }
@@ -1311,21 +1349,81 @@ export const CORE_HANDLERS: Handler[] = [
     handler: (args) => listBackups(args.ctx.backupsDir)
   },
   {
+    // The warning banner: how old is the newest backup, and is that too old?
+    channel: 'backup.status',
+    permission: 'backup.manage',
+    handler: (args) => backupStatus(args.ctx.backupsDir, true)
+  },
+  {
+    // List the .db files on a drive the operator points at (a USB stick).
+    channel: 'backup.listFolder',
+    permission: 'backup.manage',
+    handler: (args) => listBackupsIn(payloadOf<{ folder: string }>(args).folder)
+  },
+  {
+    channel: 'backup.copy',
+    permission: 'backup.manage',
+    handler: (args) => {
+      const session = requireSession(args);
+      const { path, folder } = payloadOf<{ path: string; folder: string }>(args);
+      const source = listBackups(args.ctx.backupsDir).find((backup) => resolve(backup.path) === resolve(path));
+      if (!source) throw notFound('Backup file');
+      const copied = copyBackupTo(source, folder);
+      audit(args.ctx.db, {
+        action: 'backup.copy',
+        entity: 'backup',
+        entityId: copied.name,
+        userId: session.userId,
+        username: session.username,
+        severity: 'SECURITY',
+        details: { folder: dirname(copied.path) }
+      });
+      return copied;
+    }
+  },
+  {
+    // Windows folder picker (desktop only). The browser harness uploads a path.
+    channel: 'backup.chooseFolder',
+    permission: 'backup.manage',
+    handler: async (args) => {
+      requireSession(args);
+      if (!args.ctx.pickFolder) {
+        throw new AppError(
+          'UNAVAILABLE',
+          'The folder picker runs inside the desktop app. Type the folder path instead.'
+        );
+      }
+      return { folder: await args.ctx.pickFolder({ title: 'Choose a folder for the backup' }) };
+    }
+  },
+  {
+    channel: 'backup.chooseFile',
+    permission: 'backup.manage',
+    handler: async (args) => {
+      requireSession(args);
+      if (!args.ctx.pickFile) {
+        throw new AppError(
+          'UNAVAILABLE',
+          'The file picker runs inside the desktop app. Type the backup file path instead.'
+        );
+      }
+      return { path: await args.ctx.pickFile({ title: 'Choose a backup file', extensions: ['db'] }) };
+    }
+  },
+  {
     channel: 'backup.restore',
     permission: 'backup.manage',
     handler: (args) => {
       const session = requireSession(args);
-      const { path } = payloadOf<{ path: string }>(args);
-      const result = restoreBackup(args.ctx.db, args.ctx.backupsDir, path);
-      audit(args.ctx.db, {
-        action: 'backup.restore',
-        entity: 'backup',
-        entityId: path,
-        userId: session.userId,
-        username: session.username,
-        severity: 'SECURITY',
-        details: result
-      });
+      const { path, confirm } = payloadOf<{ path: string; confirm?: string }>(args);
+      // A restore replaces every record: the operator types the file name so a
+      // stray click cannot wipe the shop's data.
+      if (!confirm || confirm.trim() !== basename(path ?? '')) {
+        throw validation(
+          `Type the backup file name (${basename(path ?? '') || 'the file name'}) to confirm the restore.`
+        );
+      }
+      const result = restoreBackup(args.ctx.db, args.ctx.backupsDir, path, actor(session));
       // Sessions are invalidated: the restored file has its own users.
       args.ctx.sessions.clear();
       return result;
@@ -1380,6 +1478,22 @@ export const CORE_HANDLERS: Handler[] = [
     }
   },
   {
+    // The printers this machine can see, for the Settings picker. Reading the
+    // list is harmless, but it belongs to the settings screen, so it needs the
+    // same permission.
+    channel: 'print.printers',
+    permission: 'settings.manage',
+    handler: async (args) => {
+      if (!args.ctx.printers) {
+        throw new AppError(
+          'UNAVAILABLE',
+          'The app reads your Windows printer list. In the browser preview, type a printer name instead.'
+        );
+      }
+      return args.ctx.printers();
+    }
+  },
+  {
     channel: 'print.document',
     handler: async (args) => {
       const session = requireSession(args);
@@ -1390,7 +1504,15 @@ export const CORE_HANDLERS: Handler[] = [
           'Printing is only available inside the desktop app. Use "Save" to export the document instead.'
         );
       }
-      const result = await args.ctx.print({ html, title: title ?? 'Infoflex document' });
+      const settings = getAllSettings(args.ctx.db);
+      const result = await args.ctx.print({
+        html,
+        title: title ?? 'Infoflex document',
+        // The administrator may pin a printer once, so the till does not have
+        // to pick one on every receipt.
+        ...(settings.printerName.trim() ? { deviceName: settings.printerName.trim() } : {}),
+        silent: settings.silentPrint
+      });
       audit(args.ctx.db, {
         action: 'document.print',
         entity: 'document',

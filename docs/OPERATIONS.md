@@ -118,12 +118,53 @@ your records).
 
 ## 5. Backups and restore
 
-- Automatic: once per 24 hours on start-up and on clean shutdown.
-- Manual: File → Backup now (desktop menu) or Backup & Restore → Back up now.
-- Files live in `%APPDATA%/Infoflex/backups/`. Copy them to a flash drive
-  regularly — they are the whole shop.
-- Restore: Backup & Restore → Restore. The current database is copied to
-  `pre-restore_…` first, then replaced, and everyone is signed out.
+- **Automatic:** one snapshot per 24 hours, taken when the app opens or closes.
+  It is skipped on a machine with no licence yet, so a fresh install does not
+  collect empty files.
+- **Manual:** Backup & Restore → **Back up now** (the app's own backups folder)
+  or **Back up to a folder…** (a flash drive, an external disk, a network share
+  the operator can write to).
+- **Where files live:** `%APPDATA%/Infoflex/backups/`. Names look like
+  `infoflex-backup_2026-03-05_14-22-01_manual.db`; the word at the end is how it
+  was made (`manual`, `auto`, `shutdown`).
+- **The seven-day warning:** if the newest backup is a week old — or there is
+  none at all — the dashboard and the Backup & Restore page show a warning. A
+  shop that never copies a backup off the machine is one disk failure from
+  losing everything.
+
+### Backing up to a USB stick
+
+1. Plug the stick in and wait for Windows to show it (for example `D:`).
+2. Backup & Restore → **Back up to a folder…** → pick the stick.
+3. The newer file appears at the top of “Recent backups”; the copy on the stick
+   is identical to the one in the app's folder.
+4. Eject the stick properly. Keep one copy in the shop and one away from it.
+
+If the drive is not plugged in, or is write-protected/full, the app says so and
+leaves the backup folder untouched. **Copy…** on any row copies an older backup
+to a chosen folder without making a new one.
+
+### Restoring
+
+1. Backup & Restore → pick the backup row (**Restore**) or type/browse to a file
+   (**Restore from a file**), then **type the file name** in the box. The
+   Restore button stays disabled until the name matches exactly.
+2. The app writes a safety copy of the current database
+   (`pre-restore_infoflex.db_<timestamp>.db`) into the backups folder, then
+   replaces the database and signs everyone out.
+3. Sign in again. Products, sales, customers, stock and settings are exactly as
+   they were in the backup.
+
+**What a restore never touches:** the licence. Edition, activation period, expiry
+and the licence history are read out of the live database before the swap and
+written back afterwards, so restoring another shop's backup — or an old backup
+from the same shop — never grants, extends or removes a licence. The backup's own
+licence state is recorded in the audit trail (`backup.restore`) for the vendor to
+inspect, not applied. Nothing about a licence expires because of a restore.
+
+A failed restore (wrong file, unreadable database, a file from another program)
+is refused before anything is replaced: the live database and its data stay as
+they were.
 
 ## 6. Data location and moving to a new computer
 
@@ -131,12 +172,41 @@ Copy the entire `%APPDATA%/Infoflex` folder (data + backups) from the old
 machine to the same path on the new one, install Infoflex there, and sign in.
 The licence travels with the database.
 
-## 7. Printing
+## 7. Printing and hardware
 
-Receipts/invoices are A4/thermal friendly HTML printed through the Windows print
-dialog. Choose the printer and paper size there; "Save HTML" exports the same
-document if you need a digital copy. Printers are the only thing the app talks to
-outside its own database — and only through the OS.
+Receipts/invoices are A4/thermal friendly HTML. By default they go through the
+Windows print dialog, where the operator picks the printer and paper size;
+"Save HTML" exports the same document if a digital copy is needed.
+
+**Pinning a receipt printer (Settings → Printing & hardware):** press **Find
+printers**, choose the till printer (for example `EPSON TM-T20III Receipt`) and
+optionally set **Print without the dialog**. With a printer pinned and silent
+printing on, F10 on the till sends the receipt straight to that printer; with
+"Ask each time" the Windows dialog appears as before. If the chosen printer is
+not connected, Windows shows its usual queue/dialog rather than losing the
+receipt. A supermarket install also has a **label printer** name field for shelf
+and scale labels.
+
+**Weighing scales (supermarket):** the till understands scale barcodes that
+carry the weight, so the cashier never types a weight the scale already printed.
+The layout is set in Settings → Printing & hardware:
+
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| Prefix digit | First digit the scale prints for a weighed item | `2` |
+| PLU digits | Digits that identify the item | `5` |
+| Weight digits | Grams, after the PLU | `5` |
+
+For `20002500250` with those defaults the till reads PLU `00025` (the product's
+PLU code) and 250 g. Some scales append a check digit; the till accepts the
+barcode with or without it. The EAN check digit itself is **not** validated —
+scales differ, and a rejected label at the till is worse than an unverified one.
+Ordinary product barcodes and PLUs still scan one unit at a time.
+
+**Receipt preview:** Settings shows a live preview to the right of the store
+identity fields. Type a new store name, footer or thank-you note and the paper
+changes before you save; the preview is rendered from the unsaved draft and
+never writes to the database.
 
 ## 8. Users and roles
 

@@ -650,6 +650,63 @@ async function main() {
     assert(list.length >= 1, 'backup not listed');
   });
 
+  await check('backup status reports freshness and the seven-day warning', async () => {
+    const status = await api<{ count: number; stale: boolean; lastAt: string | null; warnAfterDays: number }>(
+      'backup.status'
+    );
+    assert(status.count >= 1, 'no backups counted');
+    assert(status.lastAt !== null, 'no last backup time');
+    assert(status.stale === false, 'a fresh backup was called stale');
+    assert(status.warnAfterDays === 7, 'warning window');
+  });
+
+  await check('restore refuses a wrong typed confirmation', async () => {
+    await expectError(
+      'backup.restore',
+      { path: '/tmp/does-not-exist-smoke.db', confirm: 'something-else.db' },
+      'VALIDATION'
+    );
+  });
+
+  await check('printers answer plainly when there is no print engine', async () => {
+    await expectError('print.printers', {}, 'UNAVAILABLE');
+  });
+
+  await check('settings preview shows an unsaved store name and saves nothing', async () => {
+    const preview = await api<{ html: string; dirty: boolean }>('settings.preview', {
+      draft: { storeName: 'Smoke Preview Store', thankYouNote: 'Come back soon' }
+    });
+    assert(preview.html.includes('Smoke Preview Store'), 'preview did not use the draft name');
+    assert(preview.html.includes('Come back soon'), 'preview did not use the draft note');
+    assert(preview.dirty === true, 'dirty flag');
+    const saved = await api<{ storeName: string }>('settings.read');
+    assert(!saved.storeName.includes('Smoke Preview'), 'the preview wrote the store name');
+  });
+
+  await check('a scale barcode scans with its weight', async () => {
+    await api('settings.update', {
+      scalePrefix: '2',
+      scalePluDigits: 5,
+      scaleWeightDigits: 5
+    });
+    const item = await api<{ id: number }>('products.create', {
+      name: `Smoke Weighed Item ${stamp}`,
+      barcode: '00025',
+      costPrice: 90_000,
+      price: 120_000,
+      openingStock: 5_000,
+      openingBatchNo: 'SCALE-1'
+    });
+    const scan = await api<{ product: { id: number }; scannedQty: number | null; scaleBarcode: boolean } | null>(
+      'products.scan',
+      { code: '20002500250' }
+    );
+    assert(scan !== null, 'scale barcode did not scan');
+    assert(scan!.product.id === item.id, 'wrong product');
+    assert(scan!.scannedQty === 250, 'weight in grams');
+    assert(scan!.scaleBarcode === true, 'scale flag');
+  });
+
   await check('document export writes HTML', async () => {
     const doc = await api<{ html: string }>('sales.document', { id: saleId + 1 });
     const saved = await api<{ path: string }>('documents.saveHtml', {

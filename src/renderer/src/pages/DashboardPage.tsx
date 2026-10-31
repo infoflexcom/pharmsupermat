@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useApi, useApp } from '../state';
-import type { DashboardSummary } from '../../../shared/types';
+import type { BackupStatus, DashboardSummary } from '../../../shared/types';
 import { Alert, Button, Card, DataTable, formatDateTime, Kpi, Money, PageHead, Badge } from '../components/ui';
 import type { ViewKey } from '../components/Layout';
 import { formatMoney } from '../../../shared/money';
@@ -10,6 +10,7 @@ export default function DashboardPage({ onNavigate }: { onNavigate: (view: ViewK
   const { session, state, can } = useApp();
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [backup, setBackup] = useState<BackupStatus | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -18,6 +19,14 @@ export default function DashboardPage({ onNavigate }: { onNavigate: (view: ViewK
       if (!alive) return;
       setData(result);
       setLoading(false);
+    })();
+    void (async () => {
+      try {
+        const status = await api<BackupStatus>('backup.status');
+        if (alive) setBackup(status);
+      } catch {
+        // A cashier cannot read backups; the warning is simply not shown.
+      }
     })();
     return () => {
       alive = false;
@@ -51,6 +60,14 @@ export default function DashboardPage({ onNavigate }: { onNavigate: (view: ViewK
         <Alert tone="warn">
           Licence expires in {license.daysRemaining} day(s) ({license.expiresAt?.slice(0, 10)}). Renew from the
           Licence page to avoid interruption.
+        </Alert>
+      ) : null}
+
+      {backup?.stale && can('settings.manage') ? (
+        <Alert tone="warn">
+          {backup.lastAt
+            ? `No backup for ${backup.daysSince} day(s). Take one from Backup & restore.`
+            : 'No backup has ever been taken on this computer. Take one from Backup & restore.'}
         </Alert>
       ) : null}
 

@@ -3,7 +3,7 @@ import { call } from '../api';
 import { useApi, useApp } from '../state';
 import { RECEIPT_LAYOUTS, type ReceiptLayout, type SettingsPayload } from '../../../shared/types';
 import { formatMoney, moneyToInput, parseMoneyInput } from '../../../shared/money';
-import { Alert, Button, Card, Field, Input, PageHead, Select } from '../components/ui';
+import { Alert, Badge, Button, Card, Field, Input, PageHead, Select } from '../components/ui';
 
 const MAX_LOGO_BYTES = 200 * 1024;
 
@@ -14,6 +14,10 @@ export default function SettingsPage() {
   const [returnLimit, setReturnLimit] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState('');
+  const [previewNote, setPreviewNote] = useState<string | null>(null);
+  const [printers, setPrinters] = useState<{ name: string; displayName: string }[] | null>(null);
+  const [printerNote, setPrinterNote] = useState<string | null>(null);
 
   function pickLogo(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -39,6 +43,38 @@ export default function SettingsPage() {
       }
     })();
   }, [api]);
+
+  // The preview follows the draft: type a new store name and the paper changes
+  // before anything is saved. Debounced so a keystroke does not spam main.
+  useEffect(() => {
+    if (!settings) return;
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await api<{ html: string; dirty: boolean }>('settings.preview', { draft: settings });
+          if (!result) return;
+          setPreview(result.html);
+          setPreviewNote(result.dirty ? 'Unsaved changes — this is a preview.' : null);
+        } catch (err) {
+          setPreview('<!doctype html><html><body style="font-family:sans-serif;padding:16px;color:#66707f">The preview could not be built.</body></html>');
+          setPreviewNote(err instanceof Error ? err.message : 'Preview failed.');
+        }
+      })();
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [api, settings]);
+
+  async function loadPrinters() {
+    setPrinterNote(null);
+    try {
+      const list = await api<{ name: string; displayName: string }[]>('print.printers');
+      setPrinters(list);
+      if (!list?.length) setPrinterNote('Windows did not report any printers. Type a name instead.');
+    } catch (err) {
+      setPrinters([]);
+      setPrinterNote(err instanceof Error ? err.message : 'Could not read the printer list.');
+    }
+  }
 
   async function save() {
     if (!settings) return;
@@ -84,6 +120,17 @@ export default function SettingsPage() {
       </Alert>
 
       {error ? <Alert tone="error">{error}</Alert> : null}
+
+      <Card
+        title="Live receipt preview"
+        actions={<Badge tone={previewNote ? 'warn' : 'success'}>{previewNote ?? 'Matches the saved settings'}</Badge>}
+      >
+        <iframe className="doc-preview" title="Receipt preview" srcDoc={preview} style={{ height: '52vh' }} />
+        <div className="tiny muted" style={{ marginTop: 8 }}>
+          This is the paper your till prints: store name, address, phone, the footer, thank-you note, VAT and the
+          “Powered by” line, all from the fields below. Change anything and the preview follows before you save.
+        </div>
+      </Card>
 
       <Card title="Store identity">
         <div className="form-grid">
@@ -363,6 +410,157 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      <Card title="Printing & hardware">
+        <div className="form-grid">
+          <Field
+            label="Receipt printer"
+            hint="Leave on “Ask each time” to pick a printer for every print."
+          >
+            <Select
+              value={settings.printerName}
+              onChange={(e) => setSettings({ ...settings, printerName: e.target.value })}
+            >
+              <option value="">Ask each time (system dialog)</option>
+              {printers?.map((printer) => (
+                <option key={printer.name} value={printer.name}>
+                  {printer.displayName}
+                </option>
+              ))}
+              {settings.printerName && !printers?.some((printer) => printer.name === settings.printerName) ? (
+                <option value={settings.printerName}>{settings.printerName} (not detected now)</option>
+              ) : null}
+            </Select>
+          </Field>
+          <Field label="Print without the dialog" hint="Only when a printer is pinned above. Sends receipts straight to it.">
+            <Select
+              value={settings.silentPrint ? 'yes' : 'no'}
+              onChange={(e) => setSettings({ ...settings, silentPrint: e.target.value === 'yes' })}
+            >
+              <option value="no">Show the Windows print dialog</option>
+              <option value="yes">Print straight to the chosen printer</option>
+            </Select>
+          </Field>
+          <Field label="&nbsp;">
+            <div className="row tight">
+              <Button size="sm" variant="ghost" type="button" onClick={() => void loadPrinters()}>
+                Find printers
+              </Button>
+              {printers ? <span className="tiny muted">{printers.length} found</span> : null}
+            </div>
+          </Field>
+          {state?.features.supermarket ? (
+            <Field label="Shelf / scale label printer" hint="Used for price and weight labels (informational).">
+              <Input
+                value={settings.labelPrinterName}
+                placeholder="Label printer, e.g. Zebra GK420d"
+                onChange={(e) => setSettings({ ...settings, labelPrinterName: e.target.value })}
+              />
+            </Field>
+          ) : null}
+        </div>
+        {printerNote ? (
+          <div className="tiny muted" style={{ marginTop: 8 }}>
+            {printerNote}
+          </div>
+        ) : null}
+
+        {state?.features.supermarket ? (
+          <>
+            <div className="card-title" style={{ fontSize: 13, fontWeight: 650, margin: '18px 0 6px' }}>
+              Weighing scale barcodes
+            </div>
+            <div className="form-grid">
+              <Field label="Prefix digit" hint="The first digit your scale prints on a weight label (often 2).">
+                <Input
+                  value={settings.scalePrefix}
+                  inputMode="numeric"
+                  maxLength={3}
+                  onChange={(e) => setSettings({ ...settings, scalePrefix: e.target.value.replace(/[^0-9]/g, '') })}
+                />
+              </Field>
+              <Field label="PLU digits" hint="How many of the following digits are the item's PLU code.">
+                <Input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={settings.scalePluDigits}
+                  onChange={(e) => setSettings({ ...settings, scalePluDigits: Number(e.target.value) })}
+                />
+              </Field>
+              <Field label="Weight digits" hint="Grams, read from the rest of the barcode.">
+                <Input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={settings.scaleWeightDigits}
+                  onChange={(e) => setSettings({ ...settings, scaleWeightDigits: Number(e.target.value) })}
+                />
+              </Field>
+              <Field label="Example" hint="What the till expects for that layout.">
+                <div className="small" style={{ paddingTop: 8 }}>
+                  <strong>
+                    {settings.scalePrefix}
+                    {'9'.repeat(Math.max(1, settings.scalePluDigits))}
+                    {'0'.repeat(Math.max(0, settings.scaleWeightDigits - 3))}250
+                  </strong>{' '}
+                  = 250&nbsp;g
+                </div>
+              </Field>
+            </div>
+          </>
+        ) : null}
+      </Card>
+
+      {state?.features.pharmacy ? (
+        <Card title="Pharmacy options">
+          <div className="form-grid">
+            <Field label="Expiry alert (days)" hint="Batches expiring within this many days are flagged on the dashboard and the expiry report.">
+              <Input
+                type="number"
+                min={1}
+                max={730}
+                value={settings.expiryAlertDays}
+                onChange={(e) => setSettings({ ...settings, expiryAlertDays: Number(e.target.value) })}
+              />
+            </Field>
+          </div>
+        </Card>
+      ) : null}
+
+      {state?.features.supermarket ? (
+        <Card title="Supervisor approvals">
+          <div className="form-grid">
+            <Field
+              label="Approval valid for (minutes)"
+              hint="How long a supervisor's approval token works at the till before it expires."
+            >
+              <Input
+                type="number"
+                min={1}
+                max={60}
+                value={settings.approvalTtlMinutes}
+                onChange={(e) => setSettings({ ...settings, approvalTtlMinutes: Number(e.target.value) })}
+              />
+            </Field>
+            <Field
+              label="Administrator may approve their own override"
+              hint="Supervisors and cashiers never can, whatever this says."
+            >
+              <Select
+                value={settings.supervisorSelfApproval ? 'yes' : 'no'}
+                onChange={(e) => setSettings({ ...settings, supervisorSelfApproval: e.target.value === 'yes' })}
+              >
+                <option value="yes">Allowed</option>
+                <option value="no">Needs a second person</option>
+              </Select>
+            </Field>
+            <Field label="Currency" hint="Nigerian Naira is fixed for this build; amounts are stored in kobo.">
+              <Input value="NGN — ₦ (2 decimals)" readOnly disabled />
+            </Field>
+          </div>
+        </Card>
+      ) : null}
+
       <Card title="Edition & licence">
         <div className="form-grid">
           <div>
@@ -378,9 +576,22 @@ export default function SettingsPage() {
             <div style={{ fontWeight: 650 }}>{state?.license.customerName ?? '—'}</div>
           </div>
           <div>
+            <div className="tiny muted">Period</div>
+            <div style={{ fontWeight: 650 }}>
+              {state?.license.startsOn ?? '—'} → {state?.license.endsOn ?? '—'}
+            </div>
+          </div>
+          <div>
             <div className="tiny muted">Expires</div>
             <div style={{ fontWeight: 650 }}>
               {state?.license.expiresAt ? new Date(state.license.expiresAt).toLocaleDateString() : '—'}
+            </div>
+          </div>
+          <div>
+            <div className="tiny muted">Status</div>
+            <div style={{ fontWeight: 650 }}>
+              <Badge tone={state?.license.state === 'VALID' ? 'success' : 'warn'}>{state?.license.state ?? '—'}</Badge>{' '}
+              {typeof state?.license.daysRemaining === 'number' ? `${state.license.daysRemaining} day(s) left` : ''}
             </div>
           </div>
         </div>

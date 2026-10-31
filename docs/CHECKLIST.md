@@ -581,3 +581,67 @@ Verified on the same headless Linux sandbox.
 - A physical printer and paper sizes: reports print through the same Chromium dialog as receipts.
 - A month of real trading: the month table is proven with a seeded month (two trading days inside one calendar month) rather than 31 days of shop data.
 - Concurrent closing from two machines: the SQLite file is single-user, so the unique `business_date` row is the only guard needed.
+
+# Phase 9 — Settings, backup/restore and hardening
+
+## Settings (Administrator only)
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Store name, address, phone, email, licence no., tax no., own logo, receipt footer, thank-you note, "Powered by Infoflex" toggle | ✅ | One `SettingsPayload`; the logo is a data URL, the footer/thank-you appear on every document; `settings.update` audit records which keys changed |
+| Store name cannot be saved empty | ✅ | `updateSettings` → `VALIDATION` "Store name cannot be empty."; smoke and the live run both send `'   '` and are refused |
+| **Live receipt preview** | ✅ | New `settings.preview` (`{draft}` → `{html, layout, settings, dirty}`) merges the unsaved draft over the saved settings, builds a sample sale and renders it through `buildSaleDocument`; the Settings page shows it in a sandboxed `iframe` and marks it "Unsaved changes". Test: typing "Bright Care Pharmacy" changes the HTML, the stored name is untouched, an empty name falls back to the saved one, VAT appears only when enabled, and `dirty` is `false` for an unchanged draft |
+| Receipt paper size, VAT, currency, discount limit, return window, idle timeout | ✅ | `receiptLayout` (80 mm/A4), `vatEnabled`+`vatRate`, currency fixed NGN ₦ with 2dp, `maxDiscountPercent`, `returnWindowDays`, `idleTimeoutMinutes` (1–720) |
+| Enabled payment methods | ✅ | `paymentCash/Transfer/Pos/Credit`; the till only offers what is on; credit also needs a wholesale customer |
+| **Printer selection** | ✅ | `print.printers` (`listPrinters()` via an offscreen `BrowserWindow`) plus `printerName`/`silentPrint`/`labelPrinterName`; `print.document` passes `deviceName` and `silent` to Chromium. `UNAVAILABLE` (browser harness) and "no printers" both fall back to typing a name. `silent` is only sent when a printer is pinned |
+| Pharmacy options | ✅ | `expiryAlertDays` (1–730, default 90) drives the dashboard count, `stock.alerts` and the expiry reports; reading it as a typed setting removed `getNumericSetting` |
+| Supermarket options | ✅ | Loyalty (`loyaltyPointsPer100`, `loyaltyPointValue`, `loyaltyRedeemEnabled`), `approvalTtlMinutes` (1–60) and `supervisorSelfApproval` in `approvals.ts` (an Admin may approve themselves only when it is on; supervisors and cashiers never), scale layout and label printer |
+| Scale barcodes at the till | ✅ | `parseScaleBarcode` + `products.scan`; test: `20002500250` → PLU `00025`, 250 g, a trailing check digit accepted, wrong prefix/letters/zero weight/wrong length refused, a second layout works; the POS adds the grams and prints "Scale label: … added" |
+| Licence status read-only | ✅ | Settings → Edition & licence: edition, customer, period, expiry, `VALID`/… badge and `daysRemaining`, with no edit path (the Licence page is the only place that activates) |
+
+## Backup and restore
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Automatic daily local backup | ✅ | `runDailyBackup` on desktop start/shutdown (and in the harness): one snapshot per 24 h, skipped when the newest auto/shutdown file is fresh and on a `NONE` licence; test takes one, gets `null` on the second call, and `null` on an unlicensed harness |
+| Manual backup to a chosen folder or USB | ✅ | Also on the desktop File menu ("Back up to a folder…", Ctrl+Shift+B). `backup.create {label, folder}` writes the snapshot straight to the folder (`did the operator's stick really take it?`), `backup.chooseFolder` opens the Windows folder dialog, `backup.listFolder` lists what is there, `backup.copy` pushes an older file out; external files are capped at 2 GB and symlinks are refused |
+| Restore with confirmation | ✅ | `backup.restore {path, confirm}` refuses unless `confirm === basename(path)` (`VALIDATION`); the UI disables the button until the typed name matches; a safety copy `pre-restore_<dbfile>_<ts>.db` is always written first and can be restored to undo |
+| Warn if no backup in 7 days | ✅ | `backupStatus.stale` (`warnAfterDays: 7`); the Backup page shows a warning banner and the dashboard shows one for Administrators; smoke checks the fresh case |
+| **A restore never overwrites or bypasses the licence state** | ✅ | `restoreBackup` captures `license_state`, `license_guard`, `license_history`, `license_attempts`, swaps the file, then re-inserts the captured rows in one transaction; test restores a **supermarket's** backup into a pharmacy install and asserts edition, expiry and the history count survive, the products do change, the backup's own licence is only recorded in the audit trail, and the safety copy exists |
+| Two files in the same second | ✅ | Found live: second-precision names made `VACUUM INTO` fail with "output file already exists". `timestamp()` now has milliseconds and `uniquePath` never overwrites; test creates two backups and two restores in a row |
+
+## Security review
+
+| Area | Status | Evidence |
+| --- | --- | --- |
+| IPC permission checks | ✅ | Every channel declares a `permission`; `invoke` resolves the session first and denies with `FORBIDDEN`. New channels: `products.scan` (`products.view`), `print.printers`/`settings.preview` (`settings.manage`), the whole `backup.*` family (`settings.manage`) — the preview is refused to a cashier in a test |
+| SQL injection | ✅ | All queries are prepared statements with bound parameters; the only interpolated identifiers are the table/column names in the licence capture (from a constant list) and `VACUUM INTO ?` |
+| Input validation | ✅ | Typed validation for every settings field (ranges, digits, enums), backup paths (`absolute`, `.db`, exists, not a symlink, ≤ 2 GB, `PRAGMA integrity_check`, must contain the four core tables), scale digits and the typed restore confirmation |
+| Payload limits | ✅ | `invoke` refuses any payload over 4 MB with `VALIDATION` before touching a service; test sends a 4.5 MB string |
+| No sensitive data in logs or the audit trail | ✅ | `redactDetails` replaces any value whose key matches `pass|password|pin|token|secret|hash|authorization|license_code|activation_code` with `[redacted]`; `settings.update` records changed keys rather than a logo data URL; the master password never enters an audit entry (test dumps the whole trail); `verify:secrets` scans 144 files |
+
+## DONE WHEN
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| Edit the store name and see it on the next receipt preview | ✅ | Live run: preview with "Grace Pharmacy Ikeja" contains the name and leaves the stored name alone → save → the next preview (empty draft) shows the saved name; empty name refused |
+| Back up, wipe the database, restore, find all data intact | ✅ | Live run (35 checks): backup to a stand-in USB folder, then work done afterwards (a new product and a wrong store name) is replaced by the backup's 6 products, 6 sales and the right store name; a mistyped confirmation is refused with the database untouched; the safety copy is restored to prove the undo path |
+| The licence state is unaffected | ✅ | Live run compares edition, state, expiry and history before/after the restore — all identical; the API reports the kept licence and the audit entry records the file's own licence |
+
+## Verification run
+
+- `npm run typecheck` — clean (node + web, strict, `noUnusedLocals`).
+- `VENDOR_MASTER_PASSWORD=... npm test` — 18 files, **169 tests passed** (12 new phase-9 API/service tests, 3 new renderer tests, plus the updated restore contract in the reports/backup suite).
+- `npm run db:verify` — **190 checks, 0 failed** (38 tables, schema v7 — no schema change in this phase).
+- `VENDOR_MASTER_PASSWORD=... npm run verify:secrets` — PASS (144 files scanned).
+- `BASE_URL=... npm run smoke` (fresh data dir) — **53/53 passed**, including five new checks: backup status freshness/seven-day window, the refused mistyped confirmation, the plain `UNAVAILABLE` printer message, the live preview that saves nothing, and a scale barcode that scans with its weight.
+- Live walk-through on the browser harness — **35 checks**: preview draft/saved/empty-name, printer fallback, saving pharmacy and supermarket options, scale scan, backup to a chosen folder, freshness, changes after the backup, refused confirmation, restore with the licence kept, safety copy, undo restore, and a missing file refused.
+- `npm run build` — main 308.24 kB, preload 0.64 kB, renderer 1,115.29 kB + 33.55 kB CSS.
+
+## What was not verified here
+
+- **Real Windows printers.** `listPrinters()` and `webContents.print({deviceName, silent})` need Windows and a driver; the sandbox proves the `UNAVAILABLE` fallback, the pinned-name plumbing and the plain-English messages.
+- **A real USB stick or network share.** The chosen-folder path is exercised against a temporary directory on the same disk; a write-protected or unplugged stick produces Windows errors that the handler turns into `VALIDATION`/`CONFLICT` messages, not silent success.
+- **The Electron folder/file dialogs.** `dialog.showOpenDialog` only exists in the desktop build; in the browser the page falls back to typing a path (asserted by the renderer tests).
+- **A literal "delete infoflex.db and restore".** A restore deliberately keeps the licence of the machine it runs on, so a database deleted *including its licence tables* comes back as an unlicensed install until the vendor re-issues — that is the "never bypass the licence" rule working as designed. The live run therefore simulates the disaster by changing data after the backup.
+- **Time travel for the seven-day warning.** The staleness clock is `Date.now()`; the threshold and the fresh case are asserted, and the older-than-seven-days case is covered by unit logic rather than by moving the machine clock.

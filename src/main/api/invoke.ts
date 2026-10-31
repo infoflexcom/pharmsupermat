@@ -43,6 +43,15 @@ export async function invoke(
     string,
     unknown
   >;
+  // A renderer cannot push an unbounded blob through the bridge: every real
+  // payload (a logo, a CSV import, a report) is well under this.
+  try {
+    if (JSON.stringify(rawPayload ?? {}).length > 4 * 1024 * 1024) {
+      return fail('VALIDATION', 'That request is too large. Split the data and try again.');
+    }
+  } catch {
+    return fail('VALIDATION', 'That request could not be read.');
+  }
   let session: Session | null = null;
 
   try {

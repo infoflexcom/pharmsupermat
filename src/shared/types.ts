@@ -253,6 +253,64 @@ export interface SettingsPayload extends StoreProfile {
   /** Loyalty: value of one point in kobo when redeeming. */
   loyaltyPointValue: Money;
   loyaltyRedeemEnabled: boolean;
+  /* ---- phase 9: printing, pharmacy warnings and supermarket hardware ---- */
+  /** Preferred printer. Empty means Chromium's print dialog asks every time. */
+  printerName: string;
+  /** Print straight to `printerName` without showing the dialog. */
+  silentPrint: boolean;
+  /** Supermarket: the label printer used for shelf/scale labels (informational). */
+  labelPrinterName: string;
+  /** Pharmacy: warn about batches expiring within this many days. */
+  expiryAlertDays: number;
+  /** How long a supervisor/administrator approval stays valid at the till (1-60). */
+  approvalTtlMinutes: number;
+  /** Supermarket: may an administrator approve their own override? */
+  supervisorSelfApproval: boolean;
+  /** Supermarket: scales print EAN-13 weight barcodes starting with this digit. */
+  scalePrefix: string;
+  /** Digits of the PLU inside a scale barcode. */
+  scalePluDigits: number;
+  /** Digits of the weight in grams inside a scale barcode. */
+  scaleWeightDigits: number;
+}
+
+/** A product returned by a scan, with the weight embedded in a scale barcode. */
+export interface ProductScan {
+  product: Product;
+  /** Grams from a scale barcode, or null for an ordinary item scan. */
+  scannedQty: number | null;
+  /** Set when the barcode came from a scale, for the till's message. */
+  scaleBarcode: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* Backup & restore (phase 9)                                          */
+/* ------------------------------------------------------------------ */
+
+export interface BackupInfo {
+  name: string;
+  path: string;
+  size: number;
+  createdAt: string;
+  /** `auto`, `manual`, `shutdown`, `pre-restore` … */
+  label: string;
+  /** True when the file sits outside the app's own backups folder. */
+  external: boolean;
+}
+
+export interface BackupStatus {
+  count: number;
+  /** ISO timestamp of the newest backup, or null when there is none. */
+  lastAt: string | null;
+  /** Whole days since the newest backup (null when there is none). */
+  daysSince: number | null;
+  /** True when the newest backup is older than the warning threshold. */
+  stale: boolean;
+  /** Days without a backup that triggers the warning. */
+  warnAfterDays: number;
+  /** The automatic daily backup runs when the desktop app opens/closes. */
+  automatic: boolean;
+  backupsDir: string;
 }
 
 /* ------------------------------------------------------------------ */

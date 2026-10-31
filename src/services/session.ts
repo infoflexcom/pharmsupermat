@@ -28,7 +28,18 @@ export interface ApiContext {
   /** Injectable clock — keeps tests deterministic. */
   now(): Date;
   /** Electron-only printer hook; absent in the browser dev harness. */
-  print?: (payload: { html: string; title: string }) => Promise<{ printed: boolean; message: string }>;
+  print?: (payload: {
+    html: string;
+    title: string;
+    deviceName?: string;
+    silent?: boolean;
+  }) => Promise<{ printed: boolean; message: string }>;
+  /** Electron-only: the printers Windows knows about. */
+  printers?: () => Promise<{ name: string; displayName: string; isDefault: boolean }[]>;
+  /** Electron-only: a folder picker (backup to a flash drive, for example). */
+  pickFolder?: (options: { title?: string }) => Promise<string | null>;
+  /** Electron-only: a file picker (restore from a backup on a flash drive). */
+  pickFile?: (options: { title?: string; extensions: string[] }) => Promise<string | null>;
   /** Electron-only PDF renderer (Chromium printToPDF). */
   pdf?: (payload: { html: string; title: string }) => Promise<Buffer>;
 }
@@ -51,7 +62,15 @@ export function createContext(options: {
   backupsDir: string;
   version: string;
   now?: () => Date;
-  print?: (payload: { html: string; title: string }) => Promise<{ printed: boolean; message: string }>;
+  print?: (payload: {
+    html: string;
+    title: string;
+    deviceName?: string;
+    silent?: boolean;
+  }) => Promise<{ printed: boolean; message: string }>;
+  printers?: () => Promise<{ name: string; displayName: string; isDefault: boolean }[]>;
+  pickFolder?: (options: { title?: string }) => Promise<string | null>;
+  pickFile?: (options: { title?: string; extensions: string[] }) => Promise<string | null>;
   pdf?: (payload: { html: string; title: string }) => Promise<Buffer>;
 }): ApiContext {
   // Licences written before migration v4 have no HMAC yet: sign them once, in
@@ -69,6 +88,9 @@ export function createContext(options: {
     sessions: new Map(),
     now: options.now ?? (() => new Date()),
     ...(options.print ? { print: options.print } : {}),
+    ...(options.printers ? { printers: options.printers } : {}),
+    ...(options.pickFolder ? { pickFolder: options.pickFolder } : {}),
+    ...(options.pickFile ? { pickFile: options.pickFile } : {}),
     ...(options.pdf ? { pdf: options.pdf } : {})
   };
 }

@@ -7,8 +7,8 @@ import { invoke } from './api/invoke';
 import { getLicenseStatus } from '../license/license';
 import { evaluateLicense } from '../license/guard';
 import { productNameForEdition } from '../shared/editions';
-import { pdfHtml, printHtml } from './print/printer';
-import { createBackup, listBackups } from '../services/backup';
+import { listPrinters, pdfHtml, printHtml } from './print/printer';
+import { createBackup, listBackups, runDailyBackup } from '../services/backup';
 import { audit } from '../services/audit';
 
 // Keep the Windows data folder stable and branded ("%APPDATA%/Infoflex").
@@ -95,6 +95,38 @@ function buildMenu(productName: string): Menu {
                 type: 'info',
                 title: 'Backup complete',
                 message: 'Your data has been backed up.',
+                detail: info.path
+              });
+            } catch (error) {
+              await dialog.showMessageBox({
+                type: 'error',
+                title: 'Backup failed',
+                message: error instanceof Error ? error.message : String(error)
+              });
+            }
+          }
+        },
+        {
+          label: 'Back up to a folder…',
+          accelerator: 'CmdOrCtrl+Shift+B',
+          click: async () => {
+            if (!ctx?.pickFolder) return;
+            try {
+              const folder = await ctx.pickFolder({ title: 'Choose a folder for the backup (a USB drive, for example)' });
+              if (!folder) return;
+              const info = createBackup(ctx.db, backupsDir, 'manual', { folder });
+              audit(ctx.db, {
+                action: 'backup.create',
+                entity: 'backup',
+                entityId: info.name,
+                username: 'system-menu',
+                severity: 'SECURITY',
+                details: { folder }
+              });
+              await dialog.showMessageBox({
+                type: 'info',
+                title: 'Backup copied',
+                message: 'Your data has been backed up to the folder you chose.',
                 detail: info.path
               });
             } catch (error) {
@@ -211,20 +243,9 @@ async function createWindow(): Promise<void> {
 
 function ensureDailyBackup(context: ApiContext): void {
   try {
-    mkdirSync(backupsDir, { recursive: true });
-    const backups = listBackups(backupsDir);
-    const latest = backups[0];
-    const fresh = latest && Date.now() - Date.parse(latest.createdAt) < 24 * 60 * 60 * 1000;
-    if (!fresh && getLicenseStatus(context.db).state !== 'NONE') {
-      const info = createBackup(context.db, backupsDir, 'auto');
-      audit(context.db, {
-        action: 'backup.create',
-        entity: 'backup',
-        entityId: info.name,
-        username: 'system',
-        details: { automatic: true }
-      });
-    }
+    // One snapshot per 24 hours, taken as the app opens. The same function runs
+    // in the browser harness, so both behave identically.
+    runDailyBackup(context.db, backupsDir);
   } catch (error) {
     console.error('[backup] automatic backup failed', error);
   }
@@ -240,7 +261,23 @@ app.whenReady().then(async () => {
     backupsDir,
     version: APP_VERSION,
     print: printHtml,
-    pdf: pdfHtml
+    pdf: pdfHtml,
+    printers: listPrinters,
+    pickFolder: async ({ title }) => {
+      const result = await dialog.showOpenDialog({
+        title: title ?? 'Choose a folder',
+        properties: ['openDirectory', 'createDirectory']
+      });
+      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+    },
+    pickFile: async ({ title, extensions }) => {
+      const result = await dialog.showOpenDialog({
+        title: title ?? 'Choose a file',
+        properties: ['openFile'],
+        filters: [{ name: 'Backup', extensions }]
+      });
+      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+    }
   });
   ensureDailyBackup(ctx);
   startLicenseWatch();

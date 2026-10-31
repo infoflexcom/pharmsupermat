@@ -13,6 +13,29 @@ export interface AuditInput {
 }
 
 /**
+ * Keys that must never reach the audit trail. A caller that accidentally passes
+ * a whole payload (or an error object) still cannot leak a password, a session
+ * token or the vendor master password into a table that is printed and exported.
+ */
+const SECRET_KEY = /(pass(word)?|pin|token|secret|hash|authori[sz]ation|license_?code|activation_?code)/i;
+
+function redact(value: unknown, depth = 0): unknown {
+  if (depth > 6) return '[deep]';
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.slice(0, 200).map((item) => redact(item, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = SECRET_KEY.test(key) ? '[redacted]' : redact(item, depth + 1);
+  }
+  return out;
+}
+
+/** Exposed for the security verifier and tests: what an entry would store. */
+export function redactDetails(details: unknown): unknown {
+  return redact(details);
+}
+
+/**
  * Append-only audit trail. Never throws: a failed audit write must not roll
  * back a business transaction, but it is surfaced on stderr.
  */
@@ -23,7 +46,7 @@ export function audit(db: Database, input: AuditInput): void {
         ? null
         : typeof input.details === 'string'
           ? input.details
-          : JSON.stringify(input.details);
+          : JSON.stringify(redact(input.details));
     db.handle
       .prepare(
         `INSERT INTO audit_log (created_at, user_id, username, action, entity, entity_id, details, severity)

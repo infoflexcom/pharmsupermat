@@ -31,7 +31,17 @@ export const DEFAULT_SETTINGS: SettingsPayload = {
   requireShift: true,
   loyaltyPointsPer100: 1,
   loyaltyPointValue: 100,
-  loyaltyRedeemEnabled: true
+  loyaltyRedeemEnabled: true,
+  printerName: '',
+  silentPrint: false,
+  labelPrinterName: '',
+  // The migration seeds 90 days under the same key, so existing shops keep it.
+  expiryAlertDays: 90,
+  approvalTtlMinutes: 5,
+  supervisorSelfApproval: true,
+  scalePrefix: '2',
+  scalePluDigits: 5,
+  scaleWeightDigits: 5
 };
 
 /** settings row names, kept in one place so reads and writes cannot drift. */
@@ -63,7 +73,16 @@ const KEYS: Record<keyof SettingsPayload, string> = {
   requireShift: 'require_shift',
   loyaltyPointsPer100: 'loyalty_points_per_100',
   loyaltyPointValue: 'loyalty_point_value',
-  loyaltyRedeemEnabled: 'loyalty_redeem_enabled'
+  loyaltyRedeemEnabled: 'loyalty_redeem_enabled',
+  printerName: 'printer_name',
+  silentPrint: 'silent_print',
+  labelPrinterName: 'label_printer_name',
+  expiryAlertDays: 'expiry_alert_days',
+  approvalTtlMinutes: 'approval_ttl_minutes',
+  supervisorSelfApproval: 'supervisor_self_approval',
+  scalePrefix: 'scale_prefix',
+  scalePluDigits: 'scale_plu_digits',
+  scaleWeightDigits: 'scale_weight_digits'
 };
 
 export const MIN_IDLE_MINUTES = 1;
@@ -127,18 +146,17 @@ export function getAllSettings(db: Database): SettingsPayload {
     requireShift: readBool('requireShift', DEFAULT_SETTINGS.requireShift),
     loyaltyPointsPer100: readInt('loyaltyPointsPer100', DEFAULT_SETTINGS.loyaltyPointsPer100),
     loyaltyPointValue: readInt('loyaltyPointValue', DEFAULT_SETTINGS.loyaltyPointValue),
-    loyaltyRedeemEnabled: readBool('loyaltyRedeemEnabled', DEFAULT_SETTINGS.loyaltyRedeemEnabled)
+    loyaltyRedeemEnabled: readBool('loyaltyRedeemEnabled', DEFAULT_SETTINGS.loyaltyRedeemEnabled),
+    printerName: readString('printerName', DEFAULT_SETTINGS.printerName),
+    silentPrint: readBool('silentPrint', DEFAULT_SETTINGS.silentPrint),
+    labelPrinterName: readString('labelPrinterName', DEFAULT_SETTINGS.labelPrinterName),
+    expiryAlertDays: readInt('expiryAlertDays', DEFAULT_SETTINGS.expiryAlertDays),
+    approvalTtlMinutes: readInt('approvalTtlMinutes', DEFAULT_SETTINGS.approvalTtlMinutes),
+    supervisorSelfApproval: readBool('supervisorSelfApproval', DEFAULT_SETTINGS.supervisorSelfApproval),
+    scalePrefix: readString('scalePrefix', DEFAULT_SETTINGS.scalePrefix),
+    scalePluDigits: readInt('scalePluDigits', DEFAULT_SETTINGS.scalePluDigits),
+    scaleWeightDigits: readInt('scaleWeightDigits', DEFAULT_SETTINGS.scaleWeightDigits)
   };
-}
-
-/** Reads a numeric setting that is not part of the typed settings payload. */
-export function getNumericSetting(db: Database, key: string, fallback: number): number {
-  const row = db.handle.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
-    | { value: string }
-    | undefined;
-  if (!row) return fallback;
-  const parsed = Number(row.value);
-  return Number.isFinite(parsed) ? Math.round(parsed) : fallback;
 }
 
 export function getStoreProfile(db: Database): StoreProfile {
@@ -241,6 +259,48 @@ export function updateSettings(db: Database, patch: Partial<SettingsPayload>): S
   if (patch.receiptLayout !== undefined && !RECEIPT_LAYOUTS.some((layout) => layout.value === patch.receiptLayout)) {
     throw validation('Choose a valid receipt layout.');
   }
+  if (patch.storeLicenceNo !== undefined && patch.storeLicenceNo.trim().length > 60) {
+    throw validation('The licence number is too long.');
+  }
+  if (patch.storeVatNo !== undefined && patch.storeVatNo.trim().length > 60) {
+    throw validation('The tax number is too long.');
+  }
+  if (patch.receiptFooter !== undefined && patch.receiptFooter.length > 300) {
+    throw validation('The receipt footer is too long (300 characters at most).');
+  }
+  if (patch.thankYouNote !== undefined && patch.thankYouNote.length > 200) {
+    throw validation('The thank-you note is too long (200 characters at most).');
+  }
+  if (patch.printerName !== undefined && patch.printerName.trim().length > 160) {
+    throw validation('That printer name is too long.');
+  }
+  if (patch.labelPrinterName !== undefined && patch.labelPrinterName.trim().length > 160) {
+    throw validation('That label printer name is too long.');
+  }
+  if (patch.expiryAlertDays !== undefined) {
+    if (!Number.isInteger(patch.expiryAlertDays) || patch.expiryAlertDays < 1 || patch.expiryAlertDays > 730) {
+      throw validation('Expiry alerts must be between 1 and 730 days.');
+    }
+  }
+  if (patch.approvalTtlMinutes !== undefined) {
+    if (!Number.isInteger(patch.approvalTtlMinutes) || patch.approvalTtlMinutes < 1 || patch.approvalTtlMinutes > 60) {
+      throw validation('An approval must stay valid for 1 to 60 minutes.');
+    }
+  }
+  if (patch.scalePrefix !== undefined) {
+    if (!/^\d{1,3}$/.test(patch.scalePrefix.trim())) {
+      throw validation('The scale barcode prefix must be one to three digits.');
+    }
+    if (patch.scalePrefix.trim() === '0' || patch.scalePrefix.trim() === '') {
+      throw validation('A scale barcode prefix cannot be zero.');
+    }
+  }
+  if (patch.scalePluDigits !== undefined && (!Number.isInteger(patch.scalePluDigits) || patch.scalePluDigits < 1 || patch.scalePluDigits > 8)) {
+    throw validation('The PLU part of a scale barcode must be 1 to 8 digits.');
+  }
+  if (patch.scaleWeightDigits !== undefined && (!Number.isInteger(patch.scaleWeightDigits) || patch.scaleWeightDigits < 1 || patch.scaleWeightDigits > 8)) {
+    throw validation('The weight part of a scale barcode must be 1 to 8 digits.');
+  }
   const next = { ...patch };
   if ('storeLogo' in patch) next.storeLogo = validateStoreLogo(patch.storeLogo);
   setSettings(db, next);
@@ -285,4 +345,44 @@ export function enabledPaymentMethods(db: Database): {
 /** VAT in basis points (750 = 7.50%), or 0 when VAT is switched off. */
 export function vatBasisPoints(settings: SettingsPayload): number {
   return settings.vatEnabled ? Math.round(settings.vatRate * 100) : 0;
+}
+
+/**
+ * A supermarket scale prints an EAN-13 weight barcode: a prefix digit, the PLU,
+ * the weight in grams and a check digit. The shop decides the digit counts, so
+ * the layout lives in Settings rather than in the till.
+ */
+export interface ScaleLayout {
+  prefix: string;
+  pluDigits: number;
+  weightDigits: number;
+}
+
+export function scaleLayout(db: Database): ScaleLayout | null {
+  const s = getAllSettings(db);
+  if (!s.scalePrefix.trim()) return null;
+  return { prefix: s.scalePrefix.trim(), pluDigits: s.scalePluDigits, weightDigits: s.scaleWeightDigits };
+}
+
+/**
+ * Reads a scale barcode into its PLU and weight. Returns null when the code is
+ * not a scale barcode for this shop (wrong length or prefix, non-digits, zero
+ * weight), so an ordinary barcode is never mistaken for one.
+ */
+export function parseScaleBarcode(
+  code: string,
+  layout: ScaleLayout | null
+): { plu: string; weightGrams: number } | null {
+  if (!layout) return null;
+  const text = (code ?? '').trim();
+  if (!/^\d+$/.test(text)) return null;
+  if (!text.startsWith(layout.prefix)) return null;
+  const expected = layout.prefix.length + layout.pluDigits + layout.weightDigits;
+  // Some scales append a check digit; accept exactly the payload or one more.
+  if (text.length !== expected && text.length !== expected + 1) return null;
+  const plu = text.slice(layout.prefix.length, layout.prefix.length + layout.pluDigits);
+  const weightText = text.slice(layout.prefix.length + layout.pluDigits, expected);
+  const weightGrams = Number(weightText);
+  if (!Number.isInteger(weightGrams) || weightGrams <= 0) return null;
+  return { plu, weightGrams };
 }

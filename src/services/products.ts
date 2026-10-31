@@ -1,11 +1,12 @@
 import type { Database } from '../db';
 import { nowIso } from '../db';
-import type { Money, Product, ProductInput, StockReceiveInput } from '../shared/types';
+import type { Money, Product, ProductInput, ProductScan, StockReceiveInput } from '../shared/types';
 import { AppError, conflict, notFound, validation } from '../shared/errors';
 import { audit } from './audit';
 import type { Actor } from './stock';
 import { listBatches, receiveStock } from './stock';
 import { nextDocumentNumber } from './helpers';
+import { parseScaleBarcode, scaleLayout } from './settings';
 
 interface ProductRow {
   id: number;
@@ -135,6 +136,24 @@ export function findProductByCode(db: Database, code: string): Product | null {
     )
     .get(trimmed, trimmed, trimmed, trimmed) as ProductRow | undefined;
   return row ? mapProduct(row) : null;
+}
+
+/**
+ * A scan: an ordinary barcode/PLU/SKU first, then a supermarket scale barcode,
+ * which carries the weight the scale measured. The till receives the product
+ * and the grams together, so the cashier never types a weight a scale already
+ * printed.
+ */
+export function scanProduct(db: Database, code: string): ProductScan | null {
+  const trimmed = (code ?? '').trim();
+  if (!trimmed) return null;
+  const direct = findProductByCode(db, trimmed);
+  if (direct) return { product: direct, scannedQty: null, scaleBarcode: false };
+  const parsed = parseScaleBarcode(trimmed, scaleLayout(db));
+  if (!parsed) return null;
+  const product = findProductByCode(db, parsed.plu);
+  if (!product) return null;
+  return { product, scannedQty: parsed.weightGrams, scaleBarcode: true };
 }
 
 export function listCategories(db: Database): string[] {

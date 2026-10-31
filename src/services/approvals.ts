@@ -15,8 +15,9 @@ import { findUserByUsername, verifyPassword } from './auth';
 import { permissionsForRole } from '../shared/permissions';
 import { audit } from './audit';
 import { getLicenseStatus } from '../license/license';
+import { getAllSettings } from './settings';
 
-const APPROVAL_TTL_MS = 5 * 60 * 1000;
+
 
 interface StoredGrant extends ApprovalGrant {
   dbKey: number;
@@ -105,10 +106,18 @@ export function approveWithPin(
       `${user!.full_name} cannot approve a ${PURPOSE_LABEL[input.purpose]}.`
     );
   }
+  const settings = getAllSettings(db);
   if (user!.id === requester.userId) {
-    // Self-approval is allowed for administrators (they are the second pair of
-    // eyes anyway) but never silently: it is logged as a warning below.
+    // Only an administrator may approve their own override, and only while the
+    // shop allows it. A supervisor or cashier never can, whatever the setting.
+    if (user!.role !== 'ADMIN') {
+      throw new AppError('FORBIDDEN', 'Someone else has to approve your own override.');
+    }
+    if (!settings.supervisorSelfApproval) {
+      throw new AppError('FORBIDDEN', 'This shop requires a second person to approve an override.');
+    }
   }
+  const ttlMinutes = Math.min(Math.max(settings.approvalTtlMinutes || 5, 1), 60);
 
   const now = Date.now();
   sweep(now);
@@ -117,7 +126,7 @@ export function approveWithPin(
     token,
     username: user!.username,
     purpose: input.purpose,
-    expiresAt: new Date(now + APPROVAL_TTL_MS).toISOString(),
+    expiresAt: new Date(now + ttlMinutes * 60_000).toISOString(),
     dbKey: databaseKey(db),
     used: false
   };

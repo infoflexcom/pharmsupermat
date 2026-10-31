@@ -117,7 +117,11 @@ describe('backup and restore', () => {
     const before = await callOk<Product[]>(h, 'products.list', {}, admin.token);
     expect(before.some((p) => p.name === 'Late Addition')).toBe(true);
 
-    await callOk(h, 'backup.restore', { path: backup.path }, admin.token);
+    const backupName = backup.path.split(/[\\/]/).pop() ?? '';
+    // The operator types the file name; a wrong name is refused (tested below).
+    const wrong = await callErr(h, 'backup.restore', { path: backup.path, confirm: 'nope.db' }, admin.token);
+    expect(wrong.code).toBe('VALIDATION');
+    await callOk(h, 'backup.restore', { path: backup.path, confirm: backupName }, admin.token);
     // Sessions are cleared by the restore.
     const after = await callOk<{ session: unknown }>(h, 'app.state');
     expect(after.session).toBeNull();
